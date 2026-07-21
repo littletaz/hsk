@@ -1,0 +1,11 @@
+{
+  "name": "hsk-wall",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "vite"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

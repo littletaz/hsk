@@ -3,30 +3,76 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>字墙 · HSK Wall</title>
-<style>
-  html, body {
-    margin: 0; height: 100%;
-    display: flex; align-items: center; justify-content: center;
-    background: #f1ece0;
-    font-family: -apple-system, BlinkMacSystemFont, "IBM Plex Sans", sans-serif;
-    color: #221d15;
-  }
-  main { text-align: center; padding: 24px; }
-  .zi {
-    font-size: 48px; font-weight: 700;
-    font-family: "Noto Sans SC", sans-serif;
-    color: #c2680f; margin-bottom: 4px;
-  }
-  h1 { font-size: 18px; font-weight: 600; margin: 0 0 8px; }
-  p { font-size: 14px; color: #7d7259; margin: 0; }
-</style>
+<title>字墙 · Card Prototype</title>
+<link rel="stylesheet" href="assets/fonts/fonts.css">
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main>
-    <div class="zi">字墙</div>
-    <h1>HSK Wall</h1>
-    <p>🚧 Repo is live — the canvas prototype is coming next.</p>
-  </main>
+  <div class="scene">
+    <div class="flip-stage" id="flip-stage">
+      <div class="flip-inner" id="flip-inner">
+
+        <div class="flip-face flip-front">
+          <canvas id="stage"></canvas>
+        </div>
+
+        <div class="flip-face flip-back">
+          <button class="detail-close" id="detail-close" aria-label="Close">✕</button>
+          <div class="detail-hanzi" id="detail-hanzi"></div>
+          <div class="detail-pinyin" id="detail-pinyin"></div>
+          <div class="detail-pos" id="detail-pos"></div>
+          <div class="detail-def" id="detail-def"></div>
+          <div class="detail-rule"></div>
+          <div class="detail-ctx" id="detail-ctx"></div>
+          <div class="detail-example">
+            <div class="detail-example-cn" id="ex-cn"></div>
+            <div class="detail-example-py" id="ex-py"></div>
+            <div class="detail-example-en" id="ex-en"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script src="data/hsk1.js"></script>
+  <script src="src/canvas-utils.js"></script>
+  <script src="src/card.js"></script>
+  <script src="src/tilt.js"></script>
+  <script src="src/flip.js"></script>
+  <script>
+    async function boot() {
+      await Promise.all([
+        document.fonts.load('400 53px "Huninn"'),
+        document.fonts.load('600 15px "Quicksand"'),
+        document.fonts.load('400 53px "Noto Sans SC"'),
+        loadCardMask('assets/card-mask.png')
+      ]);
+
+      const word = HSK1[0];
+
+      const canvas = document.getElementById('stage');
+      const ctx = setupHiDPICanvas(canvas, 300, 240);
+      drawHSK1Card(ctx, word, 0, 0);
+
+      populateDetail(word);
+
+      const tiltController = attachTilt(canvas);
+      attachFlip(document.getElementById('flip-stage'), tiltController);
+    }
+
+    function populateDetail(word) {
+      document.getElementById('detail-hanzi').textContent = word.h;
+      document.getElementById('detail-pinyin').textContent = word.p;
+      document.getElementById('detail-pos').textContent = word.pos;
+      document.getElementById('detail-def').textContent = word.def;
+      document.getElementById('detail-ctx').textContent = word.ctx || '';
+      document.getElementById('ex-cn').textContent = word.ex.cn;
+      document.getElementById('ex-py').textContent = word.ex.py;
+      document.getElementById('ex-en').textContent = '"' + word.ex.en + '"';
+    }
+
+    boot();
+  </script>
 </body>
 </html>
