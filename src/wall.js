@@ -73,16 +73,35 @@ function createWall(canvas, words) {
 
   const colStep = CARD_W + GRID_GAP;
   const rowStep = CARD_H + GRID_GAP;
-  const blockRows = Math.ceil(words.length / GRID_COLS);
+  let blockRows = Math.ceil(words.length / GRID_COLS);
 
   const BITMAP_REFRESH_INTERVAL = 220;
   const bitmapCache = new Map();
   const BITMAP_SCALE = 2.2 * dpr;
 
   const wordGridPos = new Map();
-  words.forEach((w, i) => {
-    wordGridPos.set(w.h, { row: Math.floor(i / GRID_COLS), col: i % GRID_COLS });
-  });
+  let wordGridPos = new Map(); // word.h -> { row, col }
+    function rebuildWordGridPos() {
+      wordGridPos = new Map();
+      words.forEach((w, i) => {
+        wordGridPos.set(w.h, { row: Math.floor(i / GRID_COLS), col: i % GRID_COLS });
+      });
+    }
+    rebuildWordGridPos();
+
+    // Swaps which words the wall displays (used by the Type filter). Camera
+    // position, zoom, and stagger state are left untouched -- only the word
+    // list, its derived layout, and cached artwork are rebuilt, since a
+    // word's grid position (and therefore its blob-field look) shifts when
+    // the active set changes.
+    function setActiveWords(newWords) {
+      words = newWords;
+      blockRows = Math.ceil(words.length / GRID_COLS);
+      rebuildWordGridPos();
+      bitmapCache.clear();
+      openBitmapCache.clear();
+      render();
+    }
 
   function renderBitmap(word, time) {
     const bmp = document.createElement('canvas');
@@ -433,6 +452,9 @@ function createWall(canvas, words) {
     }, BITMAP_REFRESH_INTERVAL);
   }
 
+
   resize();
   render();
+
+  return { setActiveWords };
 }

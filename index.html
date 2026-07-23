@@ -9,6 +9,7 @@
 </head>
 <body>
   <canvas id="wall"></canvas>
+  <div id="filter-bar"></div>
 
   <script src="data/hsk1.js"></script>
   <script src="src/card.js"></script>
@@ -24,7 +25,42 @@
       ]);
 
       const canvas = document.getElementById('wall');
-      createWall(canvas, HSK1);
+      const wall = createWall(canvas, HSK1);
+      setupFilterBar(HSK1, wall);
+    }
+
+    const CATEGORY_LABELS = {
+      num: 'Numbers', pron: 'Pronouns', people: 'People', time: 'Time',
+      place: 'Places', food: 'Food', obj: 'Objects', animal: 'Animals',
+      verb: 'Verbs', adj: 'Adjectives', weather: 'Weather', greet: 'Greetings',
+      func: 'Function Words', school: 'School', work: 'Work', health: 'Health'
+    };
+
+    function setupFilterBar(allWords, wall) {
+      const categories = [...new Set(allWords.map(w => w.cat))].sort();
+      const active = new Set();
+      const bar = document.getElementById('filter-bar');
+
+      categories.forEach(cat => {
+        const btn = document.createElement('button');
+        btn.className = 'filter-chip';
+        btn.type = 'button';
+        btn.textContent = CATEGORY_LABELS[cat] || cat;
+        btn.addEventListener('click', () => {
+          if (active.has(cat)) {
+            active.delete(cat);
+            btn.classList.remove('active');
+          } else {
+            active.add(cat);
+            btn.classList.add('active');
+          }
+          const filtered = active.size === 0
+            ? allWords
+            : allWords.filter(w => active.has(w.cat));
+          wall.setActiveWords(filtered);
+        });
+        bar.appendChild(btn);
+      });
     }
 
     boot();
