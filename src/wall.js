@@ -20,8 +20,6 @@ const ZOOM_MIN = 0.8;
 const ZOOM_MAX = 1.2;
 const ENABLE_GRADIENT_ANIMATION = false; // flip to false to A/B test performance
 
-
-
 // Stagger/spring-follow: each tile eases toward its true position rather
 // than snapping instantly, with responsiveness based on distance from the
 // cursor -- close tiles react almost immediately, far ones lag and settle
@@ -35,6 +33,23 @@ const DAMPING_NEAR = 0.32;    // near cursor: little to no overshoot
 const DAMPING_FAR = 0.7;     // far from cursor: slight bounce/overshoot when settling
 const SETTLE_EPS_POS = 0.2;   // px -- close enough to target to consider settled
 const SETTLE_EPS_VEL = 0.02;  // px/frame -- slow enough to consider settled
+
+
+// INFINITE_WALL = true: the word list wraps forever in every direction (no
+// edge, ever -- good for a small word count where you'd otherwise hit the
+// edge almost immediately). INFINITE_WALL = false: the grid is bounded to
+// exactly the words provided, dragging is clamped to that content with a
+// rubber-band resistance past the edge, and it springs back on release.
+const INFINITE_WALL = true;
+
+// Rubber-band resistance (bounded mode only): how much visible overscroll
+// you get for a given raw drag distance past the edge, and the spring that
+// pulls the camera back into bounds once you let go.
+const RUBBER_BAND_MAX_OVER = 100;
+const RUBBER_BAND_RESISTANCE = 0.55;
+const CAM_SPRING_STIFFNESS = 0.2;
+const CAM_SPRING_DAMPING = 0.75;
+
 
 
 function lerp(a, b, t) {
@@ -106,8 +121,88 @@ function createWall(canvas, words) {
     return 1 + CRATER_DEPTH * (t * 2 - 1);
   }
 
+  // Maps a grid cell to a word index. In infinite mode, wraps forever via
+  // modulo. In bounded mode, cells outside the actual content simply have
+  // no word (-1) -- no wrap, so the content has a real edge.
+  function cellWordIndex(row, col) {
+    if (INFINITE_WALL) {
+      const idx = mod(row, blockRows) * GRID_COLS + mod(col, GRID_COLS);
+      return idx < words.length ? idx : -1;
+    }
+    if (row < 0 || col < 0 || col >= GRID_COLS) return -1;
+    const idx = row * GRID_COLS + col;
+    return idx < words.length ? idx : -1;
+  }
+
+  // Camera pan bounds at the current zoom (bounded mode only). If the
+  // content is smaller than the viewport at this zoom, there's no real
+  // range to drag within -- content just sits centered.
+  function getCameraBounds() {
+    const contentW = GRID_COLS * colStep - GRID_GAP;
+    const contentH = blockRows * rowStep - GRID_GAP;
+    const scaledW = contentW * zoom;
+    const scaledH = contentH * zoom;
+
+    let minX, maxX, minY, maxY;
+    if (scaledW <= cssW) {
+      minX = maxX = (cssW - scaledW) / 2;
+    } else {
+      minX = cssW - scaledW;
+      maxX = 0;
+    }
+    if (scaledH <= cssH) {
+      minY = maxY = (cssH - scaledH) / 2;
+    } else {
+      minY = cssH - scaledH;
+      maxY = 0;
+    }
+    return { minX, maxX, minY, maxY };
+  }
+
+  function dampOver(over) {
+    return (RUBBER_BAND_MAX_OVER * over * RUBBER_BAND_RESISTANCE) /
+           (RUBBER_BAND_MAX_OVER + over * RUBBER_BAND_RESISTANCE);
+  }
+
+  function applyRubberBand(value, min, max) {
+    if (value < min) return min - dampOver(min - value);
+    if (value > max) return max + dampOver(value - max);
+    return value;
+  }
+
+  // Eases the camera back into bounds after a rubber-banded drag release
+  // (or after a resize/zoom change pushes it out of bounds). No-op in
+  // infinite mode, and a no-op once settled -- only does anything while
+  // genuinely out of bounds.
+  let camVX = 0, camVY = 0;
+
+  function springCameraToBounds() {
+    const { minX, maxX, minY, maxY } = getCameraBounds();
+    const targetX = Math.min(Math.max(camX, minX), maxX);
+    const targetY = Math.min(Math.max(camY, minY), maxY);
+
+    const closeEnough =
+      Math.abs(targetX - camX) < 0.5 && Math.abs(targetY - camY) < 0.5 &&
+      Math.abs(camVX) < 0.05 && Math.abs(camVY) < 0.05;
+    if (closeEnough) {
+      camX = targetX; camY = targetY; camVX = 0; camVY = 0;
+      return;
+    }
+
+    camVX = (camVX + (targetX - camX) * CAM_SPRING_STIFFNESS) * CAM_SPRING_DAMPING;
+    camVY = (camVY + (targetY - camY) * CAM_SPRING_STIFFNESS) * CAM_SPRING_DAMPING;
+    camX += camVX;
+    camY += camVY;
+    anyUnsettled = true;
+  }
+
+  // Tiles currently drawn, rebuilt every render() call. Reused for
+  // hit-testing on click so we don't compute visibility twice.
   let visibleTiles = [];
 
+  // Words currently showing the "open" (definition) state instead of their
+  // normal gradient card. Keyed by word, not by tile position -- tapping any
+  // instance opens every instance of that word across the wrap.
   const openWords = new Set();
   const openBitmapCache = new Map();
 
@@ -162,6 +257,8 @@ function createWall(canvas, words) {
   let pointerScreenX = null, pointerScreenY = null;
 
   function render() {
+    if (!INFINITE_WALL && !dragging) springCameraToBounds();
+
     ctx.clearRect(0, 0, cssW, cssH);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
@@ -183,8 +280,8 @@ function createWall(canvas, words) {
 
     for (let row = rowMin; row <= rowMax; row++) {
       for (let col = colMin; col <= colMax; col++) {
-        const wordIndex = mod(row, blockRows) * GRID_COLS + mod(col, GRID_COLS);
-        if (wordIndex >= words.length) continue;
+        const wordIndex = cellWordIndex(row, col);
+        if (wordIndex < 0) continue;
 
         const word = words[wordIndex];
         const worldX = col * colStep;
@@ -243,8 +340,17 @@ function createWall(canvas, words) {
     const dx = e.clientX - dragStartX;
     const dy = e.clientY - dragStartY;
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true;
-    camX = camStartX + dx;
-    camY = camStartY + dy;
+
+    let newCamX = camStartX + dx;
+    let newCamY = camStartY + dy;
+    if (!INFINITE_WALL) {
+      const { minX, maxX, minY, maxY } = getCameraBounds();
+      newCamX = applyRubberBand(newCamX, minX, maxX);
+      newCamY = applyRubberBand(newCamY, minY, maxY);
+    }
+    camX = newCamX;
+    camY = newCamY;
+
     const rect = canvas.getBoundingClientRect();
     pointerScreenX = e.clientX - rect.left;
     pointerScreenY = e.clientY - rect.top;
