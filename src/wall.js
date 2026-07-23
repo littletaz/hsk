@@ -16,7 +16,7 @@ const CRATER_DEPTH = 0.1;
 const CRATER_EDGE_BIAS = 0.9;
 const GRID_COLS = 25;
 const GRID_GAP = 10;
-const ZOOM_MIN = 0.8;
+const ZOOM_MIN = 0.6;
 const ZOOM_MAX = 1.2;
 const ENABLE_GRADIENT_ANIMATION = false; // flip to false to A/B test performance
 
@@ -40,7 +40,7 @@ const SETTLE_EPS_VEL = 0.02;  // px/frame -- slow enough to consider settled
 // edge almost immediately). INFINITE_WALL = false: the grid is bounded to
 // exactly the words provided, dragging is clamped to that content with a
 // rubber-band resistance past the edge, and it springs back on release.
-const INFINITE_WALL = true;
+const INFINITE_WALL = false;
 
 // Rubber-band resistance (bounded mode only): how much visible overscroll
 // you get for a given raw drag distance past the edge, and the spring that
@@ -79,7 +79,7 @@ function createWall(canvas, words) {
   const bitmapCache = new Map();
   const BITMAP_SCALE = 2.2 * dpr;
 
-  const wordGridPos = new Map();
+
   let wordGridPos = new Map(); // word.h -> { row, col }
     function rebuildWordGridPos() {
       wordGridPos = new Map();
@@ -88,6 +88,15 @@ function createWall(canvas, words) {
       });
     }
     rebuildWordGridPos();
+
+    function setActiveWords(newWords) {
+      words = newWords;
+      blockRows = Math.ceil(words.length / GRID_COLS);
+      rebuildWordGridPos();
+      bitmapCache.clear();
+      openBitmapCache.clear();
+      render();
+    }
 
     // Swaps which words the wall displays (used by the Type filter). Camera
     // position, zoom, and stagger state are left untouched -- only the word

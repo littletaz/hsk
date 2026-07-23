@@ -308,3 +308,5 @@ const HSK1 = [
 {h:"做",p:"zuò",pos:"verb",cat:"verb",def:"to do; to make",ctx:"",ex:{cn:"你在做什么？",py:"Nǐ zài zuò shénme?",en:"What are you doing?"},learned:false},
 {h:"做饭",p:"zuò fàn",pos:"verb",cat:"food",def:"to cook",ctx:"",ex:{cn:"我在做饭。",py:"Wǒ zài zuò fàn.",en:"I'm cooking."},learned:false}
 ];
+
+HSK1.forEach(w => { w.lvl = 1; });

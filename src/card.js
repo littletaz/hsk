@@ -79,11 +79,22 @@ function fieldBase(gridRow, gridCol, freqCol, freqRow, phase, centerX, centerY, 
   };
 }
 
+// Per-level palette (base fill + 3 blob colors). Function name is now a
+// slight misnomer -- it draws any level's card, keyed by word.lvl -- kept
+// as-is rather than renamed, to avoid touching every call site for a
+// cosmetic change.
+const LEVEL_COLORS = {
+  1: { base: '#F8B51E', blob1: '255,96,0',  blob2: '255,218,0', blob3: '255,178,0' }, // yellow-ish
+  2: { base: '#1D7E89', blob1: '67,154,161', blob2: '110,183,190', blob3: '173,201,209' } // teal
+};
+
+
 function drawHSK1Card(ctx, word, x, y, time, gridRow, gridCol) {
   time = time || 0;
   gridRow = gridRow || 0;
   gridCol = gridCol || 0;
   const dpr = window.devicePixelRatio || 1;
+  const colors = LEVEL_COLORS[word.lvl] || LEVEL_COLORS[1];
 
   const off = document.createElement('canvas');
   off.width = CARD_W * dpr;
@@ -91,7 +102,7 @@ function drawHSK1Card(ctx, word, x, y, time, gridRow, gridCol) {
   const octx = off.getContext('2d');
   octx.scale(dpr, dpr);
 
-  octx.fillStyle = '#F8B51E';
+  octx.fillStyle = colors.base;
   octx.fillRect(0, 0, CARD_W, CARD_H);
 
   function paintBlob(colorRGB, base, baseRadiusFrac, driftPeriods, driftPhases, driftAmps, breathePeriod, breathePhase, breatheAmp) {
@@ -110,13 +121,13 @@ function drawHSK1Card(ctx, word, x, y, time, gridRow, gridCol) {
   }
 
   const orangeBase = fieldBase(gridRow, gridCol, 0.28, 0.45, 0, 0.32, 0.68, 0.22, 0.18);
-  paintBlob('255,96,0', orangeBase, 0.55, [5200, 6100], [0, 1.2], [0.05, 0.04], 4200, 0, 0.12);
+  paintBlob(colors.blob1, orangeBase, 0.55, [5200, 6100], [0, 1.2], [0.05, 0.04], 4200, 0, 0.12);
 
   const yellowBase = fieldBase(gridRow, gridCol, 0.33, 0.4, 2.1, 0.7, 0.25, 0.2, 0.16);
-  paintBlob('255,218,0', yellowBase, 0.5, [5800, 5000], [2.1, 0.4], [0.045, 0.05], 4800, 1.5, 0.1);
+  paintBlob(colors.blob2, yellowBase, 0.5, [5800, 5000], [2.1, 0.4], [0.045, 0.05], 4800, 1.5, 0.1);
 
   const amberBase = fieldBase(gridRow, gridCol, 0.4, 0.3, 1.0, 0.5, 0.5, 0.25, 0.2);
-  paintBlob('255,178,0', amberBase, 0.6, [6400, 5400], [1.0, 2.8], [0.05, 0.045], 5100, 2.4, 0.09);
+  paintBlob(colors.blob3, amberBase, 0.6, [6400, 5400], [1.0, 2.8], [0.05, 0.045], 5100, 2.4, 0.09);
 
   octx.globalCompositeOperation = 'overlay';
   octx.globalAlpha = 0.22;
