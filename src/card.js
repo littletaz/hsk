@@ -63,9 +63,6 @@ function loadCardMask(src) {
   });
 }
 
-// Slow, non-repeating wander for a gradient blob's center. Each blob gets its
-// own periods/phases on x and y (a Lissajous-style path) so multiple blobs
-// never drift in sync with each other. `time` is in milliseconds.
 function driftOffset(time, periodXMs, periodYMs, phaseX, phaseY, ampX, ampY) {
   const t = time / 1000;
   return {
@@ -74,13 +71,6 @@ function driftOffset(time, periodXMs, periodYMs, phaseX, phaseY, ampX, ampY) {
   };
 }
 
-// Derives a blob's *base* position from the word's canonical grid cell
-// (fixed per word -- see wall.js's wordGridPos map) instead of a constant
-// shared by every card. Low frequencies mean neighboring cells land close
-// together (so scanning across the wall feels like one continuous field
-// rather than a hard cut between tiles), while cells further apart in the
-// grid diverge -- giving each unique word a genuinely different-looking
-// blob layout instead of every card repeating the identical pattern.
 function fieldBase(gridRow, gridCol, freqCol, freqRow, phase, centerX, centerY, spreadX, spreadY) {
   const angle = gridCol * freqCol + gridRow * freqRow + phase;
   return {
@@ -119,19 +109,14 @@ function drawHSK1Card(ctx, word, x, y, time, gridRow, gridCol) {
     octx.fillRect(0, 0, CARD_W, CARD_H);
   }
 
-  // Each blob: a field-derived base (varies per word, via grid position)
-  // plus a much smaller time-drift than the earlier diagnostic version --
-  // now that spatial variety is doing the "look different" work, the time
-  // component just needs to add gentle liveliness on top, not carry the
-  // whole effect.
   const orangeBase = fieldBase(gridRow, gridCol, 0.28, 0.45, 0, 0.32, 0.68, 0.22, 0.18);
-  paintBlob('255,96,0', orangeBase, 0.55, [5200, 6100], [0, 1.2], [0.14, 0.11], 4200, 0, 0.18);   // #FF6000
+  paintBlob('255,96,0', orangeBase, 0.55, [5200, 6100], [0, 1.2], [0.05, 0.04], 4200, 0, 0.12);
 
   const yellowBase = fieldBase(gridRow, gridCol, 0.33, 0.4, 2.1, 0.7, 0.25, 0.2, 0.16);
-  paintBlob('255,218,0', yellowBase, 0.5, [5800, 5000], [2.1, 0.4], [0.13, 0.14], 4800, 1.5, 0.16); // #FFDA00
+  paintBlob('255,218,0', yellowBase, 0.5, [5800, 5000], [2.1, 0.4], [0.045, 0.05], 4800, 1.5, 0.1);
 
   const amberBase = fieldBase(gridRow, gridCol, 0.4, 0.3, 1.0, 0.5, 0.5, 0.25, 0.2);
-  paintBlob('255,178,0', amberBase, 0.6, [6400, 5400], [1.0, 2.8], [0.14, 0.13], 5100, 2.4, 0.15);   // #FFB200
+  paintBlob('255,178,0', amberBase, 0.6, [6400, 5400], [1.0, 2.8], [0.05, 0.045], 5100, 2.4, 0.09);
 
   octx.globalCompositeOperation = 'overlay';
   octx.globalAlpha = 0.22;
@@ -157,4 +142,50 @@ function drawHSK1Card(ctx, word, x, y, time, gridRow, gridCol) {
   }
 
   ctx.drawImage(off, x, y, CARD_W, CARD_H);
+}
+
+function drawOpenCard(ctx, word, x, y) {
+  const dpr = window.devicePixelRatio || 1;
+
+  const off = document.createElement('canvas');
+  off.width = CARD_W * dpr;
+  off.height = CARD_H * dpr;
+  const octx = off.getContext('2d');
+  octx.scale(dpr, dpr);
+
+  octx.fillStyle = '#fdfbf6';
+  octx.fillRect(0, 0, CARD_W, CARD_H);
+
+  octx.fillStyle = '#1c1712';
+  octx.font = '600 22px "Quicksand", sans-serif';
+  octx.textAlign = 'center';
+  octx.textBaseline = 'middle';
+  wrapText(octx, word.def, CARD_W / 2, CARD_H / 2, CARD_W - 40, 28);
+
+  if (_cardMaskAlpha) {
+    octx.globalCompositeOperation = 'destination-in';
+    octx.drawImage(_cardMaskAlpha, 0, 0, CARD_W, CARD_H);
+    octx.globalCompositeOperation = 'source-over';
+  }
+
+  ctx.drawImage(off, x, y, CARD_W, CARD_H);
+}
+
+function wrapText(ctx, text, cx, cy, maxWidth, lineHeight) {
+  const words = text.split(' ');
+  const lines = [];
+  let current = '';
+  for (const w of words) {
+    const test = current ? current + ' ' + w : w;
+    if (ctx.measureText(test).width > maxWidth && current) {
+      lines.push(current);
+      current = w;
+    } else {
+      current = test;
+    }
+  }
+  if (current) lines.push(current);
+
+  const startY = cy - ((lines.length - 1) * lineHeight) / 2;
+  lines.forEach((line, i) => ctx.fillText(line, cx, startY + i * lineHeight));
 }

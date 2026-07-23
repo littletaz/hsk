@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>字墙 · Wall Prototype</title>
+<title>字墙 · HSK Wall</title>
 <link rel="stylesheet" href="assets/fonts/fonts.css">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -11,7 +11,6 @@
   <canvas id="wall"></canvas>
 
   <script src="data/hsk1.js"></script>
-  <script src="src/canvas-utils.js"></script>
   <script src="src/card.js"></script>
   <script src="src/dev-tools.js"></script>
   <script src="src/wall.js"></script>
@@ -24,12 +23,8 @@
         loadCardMask('assets/card-mask.png')
       ]);
 
-      // 100 placeholder tiles, all the same word, just to test pan/zoom/crater.
-      const placeholderWords = Array.from({ length: 100 }, () => HSK1[0]);
-
       const canvas = document.getElementById('wall');
       createWall(canvas, HSK1);
-      
     }
 
     boot();

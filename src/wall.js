@@ -29,8 +29,8 @@ const ENABLE_GRADIENT_ANIMATION = false; // flip to false to A/B test performanc
 // the post-release "bounce back to rest", since it's just a spring chasing
 // a target that happens to stop moving once you let go.
 const STAGGER_RADIUS = 1200;   // px -- distance over which responsiveness varies
-const STIFFNESS_NEAR = 0.1;   // near cursor: snappy, minimal lag
-const STIFFNESS_FAR = 0.5;    // far from cursor: noticeable lag
+const STIFFNESS_NEAR = 0.35;   // near cursor: snappy, minimal lag
+const STIFFNESS_FAR = 0.2;    // far from cursor: noticeable lag
 const DAMPING_NEAR = 0.32;    // near cursor: little to no overshoot
 const DAMPING_FAR = 0.7;     // far from cursor: slight bounce/overshoot when settling
 const SETTLE_EPS_POS = 0.2;   // px -- close enough to target to consider settled
@@ -45,8 +45,6 @@ function smoothstep(t) {
   return t * t * (3 - 2 * t);
 }
 
-// Proper modulo (JS's % can return negative for negative inputs, which
-// breaks wrapping in the leftward/upward pan directions).
 function mod(n, m) {
   return ((n % m) + m) % m;
 }
@@ -110,11 +108,37 @@ function createWall(canvas, words) {
 
   let visibleTiles = [];
 
-  // Per-cell spring state, keyed by grid cell (stable across the infinite
-  // wrap, unlike tile objects which are recreated every render() call).
-  // Only tracks currently/recently visible cells -- harmless if it grows
-  // slowly over a long session, not worth pruning for a prototype this size.
-  const staggerState = new Map(); // "row,col" -> {x, y, vx, vy}
+  const openWords = new Set();
+  const openBitmapCache = new Map();
+
+  function getOpenBitmap(word) {
+    const cached = openBitmapCache.get(word.h);
+    if (cached) return cached;
+    const bmp = document.createElement('canvas');
+    bmp.width = CARD_W * BITMAP_SCALE;
+    bmp.height = CARD_H * BITMAP_SCALE;
+    const bctx = bmp.getContext('2d');
+    bctx.scale(BITMAP_SCALE, BITMAP_SCALE);
+    drawOpenCard(bctx, word, 0, 0);
+    openBitmapCache.set(word.h, bmp);
+    return bmp;
+  }
+
+  const BUMP_DURATION = 260;
+  const BUMP_PEAK = 0.12;
+  const bumpStartTimes = new Map();
+
+  function bumpScaleFor(wordH) {
+    const start = bumpStartTimes.get(wordH);
+    if (start == null) return 1;
+    const elapsed = performance.now() - start;
+    if (elapsed >= BUMP_DURATION) return 1;
+    anyUnsettled = true;
+    const t = elapsed / BUMP_DURATION;
+    return 1 + BUMP_PEAK * Math.sin(t * Math.PI);
+  }
+
+  const staggerState = new Map();
   let anyUnsettled = false;
 
   function updateStagger(key, targetX, targetY, stiffness, damping) {
@@ -135,9 +159,6 @@ function createWall(canvas, words) {
     return s;
   }
 
-  // Last known pointer position on screen, used as the reference point for
-  // stagger responsiveness. Defaults to viewport center so nothing lags
-  // before the first drag ever happens.
   let pointerScreenX = null, pointerScreenY = null;
 
   function render() {
@@ -183,14 +204,16 @@ function createWall(canvas, words) {
         const eased = updateStagger(key, targetCX, targetCY, stiffness, damping);
 
         const cScale = craterScaleFor(eased.x, eased.y);
-        const w = CARD_W * zoom * cScale;
-        const h = CARD_H * zoom * cScale;
+        const bump = bumpScaleFor(word.h);
+        const w = CARD_W * zoom * cScale * bump;
+        const h = CARD_H * zoom * cScale * bump;
         const x = eased.x - w / 2;
         const y = eased.y - h / 2;
 
         if (x + w < 0 || y + h < 0 || x > cssW || y > cssH) continue;
 
-        ctx.drawImage(getBitmap(word), x, y, w, h);
+        const bmp = openWords.has(word.h) ? getOpenBitmap(word) : getBitmap(word);
+        ctx.drawImage(bmp, x, y, w, h);
         visibleTiles.push({ word, screen: { x, y, w, h } });
       }
     }
@@ -276,7 +299,17 @@ function createWall(canvas, words) {
     const hit = visibleTiles.find(t =>
       px >= t.screen.x && px <= t.screen.x + t.screen.w &&
       py >= t.screen.y && py <= t.screen.y + t.screen.h);
-    if (hit) console.log('Clicked word:', hit.word.h, hit.word.p);
+    if (!hit) return;
+
+    const key = hit.word.h;
+    if (openWords.has(key)) {
+      openWords.delete(key);
+    } else {
+      openWords.add(key);
+    }
+    bumpStartTimes.set(key, performance.now());
+    render();
+    startSettleLoopIfNeeded();
   });
 
   window.addEventListener('resize', resize);
@@ -286,6 +319,7 @@ function createWall(canvas, words) {
       const seen = new Set();
       for (const tile of visibleTiles) {
         if (seen.has(tile.word.h)) continue;
+        if (openWords.has(tile.word.h)) continue;
         seen.add(tile.word.h);
         renderBitmap(tile.word, performance.now());
       }
