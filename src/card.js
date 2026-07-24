@@ -1,5 +1,5 @@
 const CARD_W = 300;
-const CARD_H = 240;
+const CARD_H = 180;
 
 let _noisePatternCache = null;
 let _noisePatternDpr = null;
@@ -144,7 +144,7 @@ function drawHSK1Card(ctx, word, x, y, time, gridRow, gridCol) {
 
   octx.fillStyle = 'rgba(28, 23, 18, 0.7)';
   octx.font = '600 15px "Quicksand", sans-serif';
-  octx.fillText(word.p, CARD_W / 2, CARD_H * 0.68);
+  octx.fillText(word.p, CARD_W / 2, CARD_H * 0.8);
 
   if (_cardMaskAlpha) {
     octx.globalCompositeOperation = 'destination-in';

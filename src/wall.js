@@ -10,15 +10,28 @@
 // regardless of how far you've panned, since we only ever touch the cells
 // actually on screen.
 
-
-const CRATER_RADIUS = 1200;
-const CRATER_DEPTH = 0.1;
-const CRATER_EDGE_BIAS = 0.9;
-const GRID_COLS = 25;
+const CRATER_RADIUS = 1200;   // px -- distance at which the effect fully settles
+const CRATER_DEPTH = 0.1;   // 0..~0.4 -- how strong the shrink/enlarge range is
+const CRATER_EDGE_BIAS = 0.9; // >1 concentrates the size change near the rim; 1 = even/gradual
 const GRID_GAP = 10;
-const ZOOM_MIN = 0.6;
+const ZOOM_MIN = 0.8;
 const ZOOM_MAX = 1.2;
 const ENABLE_GRADIENT_ANIMATION = false; // flip to false to A/B test performance
+
+// INFINITE_WALL = true: the word list wraps forever in every direction (no
+// edge, ever -- good for a small word count where you'd otherwise hit the
+// edge almost immediately). INFINITE_WALL = false: the grid is bounded to
+// exactly the words provided, dragging is clamped to that content with a
+// rubber-band resistance past the edge, and it springs back on release.
+const INFINITE_WALL = false;
+
+// Rubber-band resistance (bounded mode only): how much visible overscroll
+// you get for a given raw drag distance past the edge, and the spring that
+// pulls the camera back into bounds once you let go.
+const RUBBER_BAND_MAX_OVER = 100;    // px -- roughly the max overscroll, however hard you pull
+const RUBBER_BAND_RESISTANCE = 0.55; // 0..1 -- higher = less give near the edge
+const CAM_SPRING_STIFFNESS = 0.2;
+const CAM_SPRING_DAMPING = 0.75;
 
 // Stagger/spring-follow: each tile eases toward its true position rather
 // than snapping instantly, with responsiveness based on distance from the
@@ -34,23 +47,18 @@ const DAMPING_FAR = 0.7;     // far from cursor: slight bounce/overshoot when se
 const SETTLE_EPS_POS = 0.2;   // px -- close enough to target to consider settled
 const SETTLE_EPS_VEL = 0.02;  // px/frame -- slow enough to consider settled
 
-
-// INFINITE_WALL = true: the word list wraps forever in every direction (no
-// edge, ever -- good for a small word count where you'd otherwise hit the
-// edge almost immediately). INFINITE_WALL = false: the grid is bounded to
-// exactly the words provided, dragging is clamped to that content with a
-// rubber-band resistance past the edge, and it springs back on release.
-const INFINITE_WALL = false;
-
-// Rubber-band resistance (bounded mode only): how much visible overscroll
-// you get for a given raw drag distance past the edge, and the spring that
-// pulls the camera back into bounds once you let go.
-const RUBBER_BAND_MAX_OVER = 100;
-const RUBBER_BAND_RESISTANCE = 0.55;
-const CAM_SPRING_STIFFNESS = 0.2;
-const CAM_SPRING_DAMPING = 0.75;
-
-
+// Filter-change transition: rather than swapping words instantly (which can
+// leave a stale, oversized tile overlapping a newly-placed one for a frame),
+// every tile shrinks to 0 first (still showing the OLD word list), THEN the
+// data actually swaps, THEN new tiles grow in (NEW word list) -- so old and
+// new content never coexist at meaningful size. Staggered by distance from
+// the viewport center (not the drag-stagger's cursor-relative reference) for
+// a "ripple outward" feel. Reuses the existing settle-loop (anyUnsettled)
+// rather than a separate animation loop.
+const FILTER_STAGGER_RADIUS = 900;    // px -- distance range over which stagger delay varies
+const FILTER_EXIT_DURATION = 260;     // ms -- each tile's own shrink duration
+const FILTER_ENTER_DURATION = 320;    // ms -- each tile's own grow duration
+const FILTER_STAGGER_MAX_DELAY = 220; // ms -- extra delay for the farthest-out tile
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
@@ -60,6 +68,21 @@ function smoothstep(t) {
   return t * t * (3 - 2 * t);
 }
 
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+// Column count as a function of word count, aiming for a 5:4 (columns:rows)
+// grid shape rather than a fixed width or a perfect square. Recomputed
+// every time the active word list changes (see setActiveWords /
+// updateTransitionPhase) -- not a fixed constant, since a good column count
+// for 300 words is a bad one for 10.
+function computeGridCols(wordCount) {
+  return Math.max(1, Math.ceil(Math.sqrt(wordCount * 5 / 4)));
+}
+
+// Proper modulo (JS's % can return negative for negative inputs, which
+// breaks wrapping in the leftward/upward pan directions).
 function mod(n, m) {
   return ((n % m) + m) % m;
 }
@@ -73,44 +96,21 @@ function createWall(canvas, words) {
 
   const colStep = CARD_W + GRID_GAP;
   const rowStep = CARD_H + GRID_GAP;
+  let GRID_COLS = computeGridCols(words.length);
   let blockRows = Math.ceil(words.length / GRID_COLS);
 
   const BITMAP_REFRESH_INTERVAL = 220;
   const bitmapCache = new Map();
   const BITMAP_SCALE = 2.2 * dpr;
 
-
-  let wordGridPos = new Map(); // word.h -> { row, col }
-    function rebuildWordGridPos() {
-      wordGridPos = new Map();
-      words.forEach((w, i) => {
-        wordGridPos.set(w.h, { row: Math.floor(i / GRID_COLS), col: i % GRID_COLS });
-      });
-    }
-    rebuildWordGridPos();
-
-    function setActiveWords(newWords) {
-      words = newWords;
-      blockRows = Math.ceil(words.length / GRID_COLS);
-      rebuildWordGridPos();
-      bitmapCache.clear();
-      openBitmapCache.clear();
-      render();
-    }
-
-    // Swaps which words the wall displays (used by the Type filter). Camera
-    // position, zoom, and stagger state are left untouched -- only the word
-    // list, its derived layout, and cached artwork are rebuilt, since a
-    // word's grid position (and therefore its blob-field look) shifts when
-    // the active set changes.
-    function setActiveWords(newWords) {
-      words = newWords;
-      blockRows = Math.ceil(words.length / GRID_COLS);
-      rebuildWordGridPos();
-      bitmapCache.clear();
-      openBitmapCache.clear();
-      render();
-    }
+  let wordGridPos = new Map();
+  function rebuildWordGridPos() {
+    wordGridPos = new Map();
+    words.forEach((w, i) => {
+      wordGridPos.set(w.h, { row: Math.floor(i / GRID_COLS), col: i % GRID_COLS });
+    });
+  }
+  rebuildWordGridPos();
 
   function renderBitmap(word, time) {
     const bmp = document.createElement('canvas');
@@ -149,9 +149,6 @@ function createWall(canvas, words) {
     return 1 + CRATER_DEPTH * (t * 2 - 1);
   }
 
-  // Maps a grid cell to a word index. In infinite mode, wraps forever via
-  // modulo. In bounded mode, cells outside the actual content simply have
-  // no word (-1) -- no wrap, so the content has a real edge.
   function cellWordIndex(row, col) {
     if (INFINITE_WALL) {
       const idx = mod(row, blockRows) * GRID_COLS + mod(col, GRID_COLS);
@@ -162,11 +159,17 @@ function createWall(canvas, words) {
     return idx < words.length ? idx : -1;
   }
 
-  // Camera pan bounds at the current zoom (bounded mode only). If the
-  // content is smaller than the viewport at this zoom, there's no real
-  // range to drag within -- content just sits centered.
+  // Actual occupied width in columns -- GRID_COLS once there's enough
+  // content to fill every column, but narrower whenever the word count is
+  // smaller than that (otherwise centering/bounds math assumes content
+  // spans the full width even when it doesn't, landing far off to the
+  // side of where the cards actually are).
+  function occupiedCols(wordCount) {
+    return Math.min(wordCount, GRID_COLS);
+  }
+
   function getCameraBounds() {
-    const contentW = GRID_COLS * colStep - GRID_GAP;
+    const contentW = occupiedCols(words.length) * colStep - GRID_GAP;
     const contentH = blockRows * rowStep - GRID_GAP;
     const scaledW = contentW * zoom;
     const scaledH = contentH * zoom;
@@ -198,39 +201,114 @@ function createWall(canvas, words) {
     return value;
   }
 
-  // Eases the camera back into bounds after a rubber-banded drag release
-  // (or after a resize/zoom change pushes it out of bounds). No-op in
-  // infinite mode, and a no-op once settled -- only does anything while
-  // genuinely out of bounds.
+  // ---------- Generalized camera targeting ----------
   let camVX = 0, camVY = 0;
+  let camTargetX = null, camTargetY = null;
 
-  function springCameraToBounds() {
-    const { minX, maxX, minY, maxY } = getCameraBounds();
-    const targetX = Math.min(Math.max(camX, minX), maxX);
-    const targetY = Math.min(Math.max(camY, minY), maxY);
+  function setCameraTarget(x, y) {
+    camTargetX = x;
+    camTargetY = y;
+  }
 
+  function updateCameraSpring() {
+    if (camTargetX === null) return;
     const closeEnough =
-      Math.abs(targetX - camX) < 0.5 && Math.abs(targetY - camY) < 0.5 &&
+      Math.abs(camTargetX - camX) < 0.5 && Math.abs(camTargetY - camY) < 0.5 &&
       Math.abs(camVX) < 0.05 && Math.abs(camVY) < 0.05;
     if (closeEnough) {
-      camX = targetX; camY = targetY; camVX = 0; camVY = 0;
+      camX = camTargetX; camY = camTargetY; camVX = 0; camVY = 0;
+      camTargetX = null; camTargetY = null;
       return;
     }
-
-    camVX = (camVX + (targetX - camX) * CAM_SPRING_STIFFNESS) * CAM_SPRING_DAMPING;
-    camVY = (camVY + (targetY - camY) * CAM_SPRING_STIFFNESS) * CAM_SPRING_DAMPING;
+    camVX = (camVX + (camTargetX - camX) * CAM_SPRING_STIFFNESS) * CAM_SPRING_DAMPING;
+    camVY = (camVY + (camTargetY - camY) * CAM_SPRING_STIFFNESS) * CAM_SPRING_DAMPING;
     camX += camVX;
     camY += camVY;
     anyUnsettled = true;
   }
 
-  // Tiles currently drawn, rebuilt every render() call. Reused for
-  // hit-testing on click so we don't compute visibility twice.
+  function checkBoundsAndSnapBack() {
+    if (INFINITE_WALL || dragging || camTargetX !== null) return;
+    const { minX, maxX, minY, maxY } = getCameraBounds();
+    const targetX = Math.min(Math.max(camX, minX), maxX);
+    const targetY = Math.min(Math.max(camY, minY), maxY);
+    if (Math.abs(targetX - camX) > 0.5 || Math.abs(targetY - camY) > 0.5) {
+      setCameraTarget(targetX, targetY);
+    }
+  }
+
+  function centerCameraOnWorldPoint(worldX, worldY) {
+    setCameraTarget(cssW / 2 - worldX * zoom, cssH / 2 - worldY * zoom);
+  }
+
+  function centerCameraOnContent(wordCount) {
+    const rows = Math.ceil(wordCount / GRID_COLS);
+    const contentW = occupiedCols(wordCount) * colStep - GRID_GAP;
+    const contentH = rows * rowStep - GRID_GAP;
+    centerCameraOnWorldPoint(contentW / 2, contentH / 2);
+  }
+
+  function centerCameraOnWordIndex(index) {
+    const row = Math.floor(index / GRID_COLS);
+    const col = index % GRID_COLS;
+    centerCameraOnWorldPoint(col * colStep + CARD_W / 2, row * rowStep + CARD_H / 2);
+  }
+
+  // ---------- Filter-change transition ----------
+  let transitionPhase = 'idle';
+  let transitionStartTime = 0;
+  let pendingWords = null;
+
+  function setActiveWords(newWords) {
+    pendingWords = newWords;
+    transitionPhase = 'exiting';
+    transitionStartTime = performance.now();
+    startSettleLoopIfNeeded();
+  }
+
+  function transitionScaleFor(screenCX, screenCY) {
+    if (transitionPhase === 'idle') return 1;
+
+    const dist = Math.hypot(screenCX - cssW / 2, screenCY - cssH / 2);
+    const distFactor = Math.min(dist / FILTER_STAGGER_RADIUS, 1);
+    const delay = distFactor * FILTER_STAGGER_MAX_DELAY;
+    const duration = transitionPhase === 'exiting' ? FILTER_EXIT_DURATION : FILTER_ENTER_DURATION;
+    const elapsed = performance.now() - transitionStartTime - delay;
+    const t = Math.min(Math.max(elapsed / duration, 0), 1);
+    const eased = easeInOutCubic(t);
+
+    anyUnsettled = true;
+    return transitionPhase === 'exiting' ? (1 - eased) : eased;
+  }
+
+  function updateTransitionPhase() {
+    if (transitionPhase === 'idle') return;
+
+    const totalExit = FILTER_STAGGER_MAX_DELAY + FILTER_EXIT_DURATION;
+    const totalEnter = FILTER_STAGGER_MAX_DELAY + FILTER_ENTER_DURATION;
+    const elapsed = performance.now() - transitionStartTime;
+
+    if (transitionPhase === 'exiting' && elapsed >= totalExit) {
+      words = pendingWords;
+      pendingWords = null;
+      GRID_COLS = computeGridCols(words.length);
+      blockRows = Math.ceil(words.length / GRID_COLS);
+      rebuildWordGridPos();
+      bitmapCache.clear();
+      openBitmapCache.clear();
+      centerCameraOnContent(words.length);
+      transitionPhase = 'entering';
+      transitionStartTime = performance.now();
+      anyUnsettled = true;
+    } else if (transitionPhase === 'entering' && elapsed >= totalEnter) {
+      transitionPhase = 'idle';
+    } else {
+      anyUnsettled = true;
+    }
+  }
+
   let visibleTiles = [];
 
-  // Words currently showing the "open" (definition) state instead of their
-  // normal gradient card. Keyed by word, not by tile position -- tapping any
-  // instance opens every instance of that word across the wrap.
   const openWords = new Set();
   const openBitmapCache = new Map();
 
@@ -285,7 +363,9 @@ function createWall(canvas, words) {
   let pointerScreenX = null, pointerScreenY = null;
 
   function render() {
-    if (!INFINITE_WALL && !dragging) springCameraToBounds();
+    updateTransitionPhase();
+    checkBoundsAndSnapBack();
+    updateCameraSpring();
 
     ctx.clearRect(0, 0, cssW, cssH);
     ctx.imageSmoothingEnabled = true;
@@ -330,11 +410,14 @@ function createWall(canvas, words) {
 
         const cScale = craterScaleFor(eased.x, eased.y);
         const bump = bumpScaleFor(word.h);
-        const w = CARD_W * zoom * cScale * bump;
-        const h = CARD_H * zoom * cScale * bump;
+        const tScale = transitionScaleFor(eased.x, eased.y);
+        const totalScale = cScale * bump * tScale;
+        const w = CARD_W * zoom * totalScale;
+        const h = CARD_H * zoom * totalScale;
         const x = eased.x - w / 2;
         const y = eased.y - h / 2;
 
+        if (w < 0.5 || h < 0.5) continue;
         if (x + w < 0 || y + h < 0 || x > cssW || y > cssH) continue;
 
         const bmp = openWords.has(word.h) ? getOpenBitmap(word) : getBitmap(word);
@@ -461,9 +544,8 @@ function createWall(canvas, words) {
     }, BITMAP_REFRESH_INTERVAL);
   }
 
-
   resize();
   render();
 
-  return { setActiveWords };
+  return { setActiveWords, centerCameraOnWordIndex };
 }
