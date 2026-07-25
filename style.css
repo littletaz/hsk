@@ -172,3 +172,114 @@ html, body {
 .search-not-found {
   animation: search-shake 0.3s ease;
 }
+
+
+
+/* Tablet */
+@media (max-width: 1023px) {
+  #control-bar {
+    gap: 15px;
+    padding: 11px;
+  }
+
+  #search-wrap {
+    width: 285px;
+    height: 53px;
+  }
+
+  #search-input {
+    font-size: 16px;
+    padding: 0 42px 0 15px;
+  }
+
+  #filter-toggle {
+    width: 65px;
+    height: 53px;
+  }
+
+  #filter-toggle svg {
+    width: 24px;
+    height: 17px;
+  }
+
+  #filter-panel {
+    width: 385px;
+    padding: 21px;
+    border-radius: 24px;
+    bottom: 98px;
+  }
+
+  .filter-section + .filter-section {
+    margin-top: 30px;
+  }
+
+  .filter-section-label {
+    font-size: 17px;
+    margin-bottom: 12px;
+  }
+
+  .filter-chip {
+    font-size: 13px;
+    padding: 8px 14px;
+    border-radius: 11px;
+  }
+}
+
+/* Mobile */
+@media (max-width: 599px) {
+  #control-bar {
+    gap: 11px;
+    padding: 8px;
+    bottom: 12px;
+  }
+
+  #search-wrap {
+    width: 207px;
+    height: 38px;
+  }
+
+  #search-input {
+    font-size: 14px;
+    padding: 0 30px 0 11px;
+  }
+
+  .search-icon {
+    right: 11px;
+  }
+
+  #filter-toggle {
+    width: 47px;
+    height: 38px;
+  }
+
+  #filter-toggle svg {
+    width: 17px;
+    height: 12px;
+  }
+
+  #filter-panel {
+    width: 280px;
+    padding: 15px;
+    border-radius: 17px;
+    bottom: 58px;
+  }
+
+  .filter-section + .filter-section {
+    margin-top: 21px;
+  }
+
+  .filter-section-label {
+    font-size: 16px;
+    margin-bottom: 9px;
+  }
+
+  .filter-chip {
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: 8px;
+  }
+
+  .filter-row {
+    gap: 7px;
+  }
+}
