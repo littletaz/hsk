@@ -16,7 +16,7 @@ const CRATER_EDGE_BIAS = 0.9; // >1 concentrates the size change near the rim; 1
 const GRID_GAP = 10;
 const ZOOM_MIN = 0.8;
 const ZOOM_MAX = 1.2;
-const ENABLE_GRADIENT_ANIMATION = false; // flip to false to A/B test performance
+const ENABLE_GRADIENT_ANIMATION = true; // flip to false to A/B test performance
 
 // INFINITE_WALL = true: the word list wraps forever in every direction (no
 // edge, ever -- good for a small word count where you'd otherwise hit the
@@ -99,11 +99,22 @@ function createWall(canvas, words) {
   let GRID_COLS = computeGridCols(words.length);
   let blockRows = Math.ceil(words.length / GRID_COLS);
 
-  const BITMAP_REFRESH_INTERVAL = 220;
-  const bitmapCache = new Map();
-  const BITMAP_SCALE = 2.2 * dpr;
+  // Per-word bitmap cache -- each unique word is pre-rendered once and
+  // reused for every tile showing that word, however many times it repeats
+  // across the infinite wrap. Bitmaps are periodically regenerated (see
+  // BITMAP_REFRESH_INTERVAL below) with a new time value, which is what
+  // drives the gradient drift -- the wall's pan/zoom itself stays purely
+  // event-driven and unaffected; only the cached tile artwork changes.
+  const BITMAP_REFRESH_INTERVAL = 220; // ms -- ~4.5 refreshes/sec, plenty for slow drift
+  const bitmapCache = new Map(); // word.h -> HTMLCanvasElement
+  const BITMAP_SCALE = 2.2 * dpr; // headroom so crater-enlarged tiles stay crisp
 
-  let wordGridPos = new Map();
+  // Each word's fixed position within the repeating block -- used to seed
+  // that word's blob field layout (see fieldBase in card.js) so different
+  // words look visibly different from each other, while every wrapped
+  // repeat of the *same* word still shares one identical cached bitmap.
+  // Rebuilt whenever the active word list changes (see setActiveWords).
+  let wordGridPos = new Map(); // word.h -> { row, col }
   function rebuildWordGridPos() {
     wordGridPos = new Map();
     words.forEach((w, i) => {
@@ -127,7 +138,7 @@ function createWall(canvas, words) {
   function getBitmap(word) {
     const cached = bitmapCache.get(word.h);
     if (cached) return cached;
-    return renderBitmap(word, performance.now());
+    return renderBitmap(word, performance.now()); // first draw, synchronous
   }
 
   function resize() {
@@ -146,9 +157,13 @@ function createWall(canvas, words) {
     const normalized = Math.min(dist / CRATER_RADIUS, 1);
     const biased = Math.pow(normalized, CRATER_EDGE_BIAS);
     const t = smoothstep(biased);
+    // t=0 (center) -> shrunk; t=1 (at/past radius) -> enlarged.
     return 1 + CRATER_DEPTH * (t * 2 - 1);
   }
 
+  // Maps a grid cell to a word index. In infinite mode, wraps forever via
+  // modulo. In bounded mode, cells outside the actual content simply have
+  // no word (-1) -- no wrap, so the content has a real edge.
   function cellWordIndex(row, col) {
     if (INFINITE_WALL) {
       const idx = mod(row, blockRows) * GRID_COLS + mod(col, GRID_COLS);
@@ -159,6 +174,9 @@ function createWall(canvas, words) {
     return idx < words.length ? idx : -1;
   }
 
+  // Camera pan bounds at the current zoom (bounded mode only). If the
+  // content is smaller than the viewport at this zoom, there's no real
+  // range to drag within -- content just sits centered.
   // Actual occupied width in columns -- GRID_COLS once there's enough
   // content to fill every column, but narrower whenever the word count is
   // smaller than that (otherwise centering/bounds math assumes content
@@ -202,6 +220,11 @@ function createWall(canvas, words) {
   }
 
   // ---------- Generalized camera targeting ----------
+  // One spring, one target, reused for three different callers: snapping
+  // back into bounds after a rubber-banded drag, recentering after a filter
+  // change, and (later) jumping to a specific searched word. Whoever sets a
+  // target last wins; the spring itself doesn't know or care why it's
+  // moving toward a given point.
   let camVX = 0, camVY = 0;
   let camTargetX = null, camTargetY = null;
 
@@ -227,6 +250,8 @@ function createWall(canvas, words) {
     anyUnsettled = true;
   }
 
+  // Bounded mode only: if panned out of bounds and nothing else has already
+  // claimed the camera (a filter recenter, a future search jump), ease back.
   function checkBoundsAndSnapBack() {
     if (INFINITE_WALL || dragging || camTargetX !== null) return;
     const { minX, maxX, minY, maxY } = getCameraBounds();
@@ -237,10 +262,16 @@ function createWall(canvas, words) {
     }
   }
 
+  // Centers the camera on an arbitrary world-space point -- the shared
+  // primitive underneath the two functions below.
   function centerCameraOnWorldPoint(worldX, worldY) {
     setCameraTarget(cssW / 2 - worldX * zoom, cssH / 2 - worldY * zoom);
   }
 
+  // Recenters on the geometric middle of a word list of the given length,
+  // without needing that list to be the currently-active one yet (used
+  // mid-transition, right as the data swaps but before blockRows updates
+  // elsewhere have necessarily happened).
   function centerCameraOnContent(wordCount) {
     const rows = Math.ceil(wordCount / GRID_COLS);
     const contentW = occupiedCols(wordCount) * colStep - GRID_GAP;
@@ -248,17 +279,30 @@ function createWall(canvas, words) {
     centerCameraOnWorldPoint(contentW / 2, contentH / 2);
   }
 
-  function centerCameraOnWordIndex(index) {
+  // Jumps to a specific word by its index in the *currently active* words
+  // array, and gives it a bump-highlight on arrival (reusing the same bump
+  // used for click-to-open) so it's easy to spot once the camera settles
+  // there. Exposed via createWall's return value -- used by search now.
+  function centerCameraOnWordIndex(index, spotlight) {
     const row = Math.floor(index / GRID_COLS);
     const col = index % GRID_COLS;
     centerCameraOnWorldPoint(col * colStep + CARD_W / 2, row * rowStep + CARD_H / 2);
+    const word = words[index];
+    if (word) {
+      bumpStartTimes.set(word.h, performance.now());
+      if (spotlight) spotlightWordH = word.h;
+      startSettleLoopIfNeeded();
+    }
   }
 
   // ---------- Filter-change transition ----------
-  let transitionPhase = 'idle';
+  let transitionPhase = 'idle'; // 'idle' | 'exiting' | 'entering'
   let transitionStartTime = 0;
   let pendingWords = null;
 
+  // Swaps which words the wall displays (used by the filters). Rather than
+  // swapping immediately, kicks off the shrink-out phase -- see
+  // updateTransitionPhase for the rest of the sequence.
   function setActiveWords(newWords) {
     pendingWords = newWords;
     transitionPhase = 'exiting';
@@ -281,6 +325,9 @@ function createWall(canvas, words) {
     return transitionPhase === 'exiting' ? (1 - eased) : eased;
   }
 
+  // Advances exiting -> (data swap + recenter) -> entering -> idle. Called
+  // once at the top of every render() so the same frame that finishes
+  // exiting can immediately start entering with the new data.
   function updateTransitionPhase() {
     if (transitionPhase === 'idle') return;
 
@@ -307,10 +354,22 @@ function createWall(canvas, words) {
     }
   }
 
+  // Tiles currently drawn, rebuilt every render() call. Reused for
+  // hit-testing on click so we don't compute visibility twice.
   let visibleTiles = [];
 
+  // Words currently showing the "open" (definition) state instead of their
+  // normal gradient card. Keyed by word, not by tile position -- tapping any
+  // instance opens every instance of that word across the wrap.
   const openWords = new Set();
-  const openBitmapCache = new Map();
+
+  // Search spotlight: while set, every tile except this word renders dimmed,
+  // making a search result stand out against the rest of the wall. Cleared
+  // automatically the moment a new drag starts (see pointerdown below).
+  // Dim amount is a placeholder -- exact look not designed yet, easy to tune.
+  const SPOTLIGHT_DIM_OPACITY = 0.35;
+  let spotlightWordH = null;
+  const openBitmapCache = new Map(); // word.h -> HTMLCanvasElement, rendered once (static, no drift)
 
   function getOpenBitmap(word) {
     const cached = openBitmapCache.get(word.h);
@@ -325,9 +384,12 @@ function createWall(canvas, words) {
     return bmp;
   }
 
-  const BUMP_DURATION = 260;
-  const BUMP_PEAK = 0.12;
-  const bumpStartTimes = new Map();
+  // Tiny "bump" pop whenever a word's open state is toggled. Reuses the
+  // existing settle loop (via anyUnsettled) rather than needing a separate
+  // animation loop -- the bump just keeps that loop alive a bit longer.
+  const BUMP_DURATION = 260; // ms
+  const BUMP_PEAK = 0.12;    // extra scale at the peak of the pop
+  const bumpStartTimes = new Map(); // word.h -> performance.now() at last toggle
 
   function bumpScaleFor(wordH) {
     const start = bumpStartTimes.get(wordH);
@@ -339,7 +401,11 @@ function createWall(canvas, words) {
     return 1 + BUMP_PEAK * Math.sin(t * Math.PI);
   }
 
-  const staggerState = new Map();
+  // Per-cell spring state, keyed by grid cell (stable across the infinite
+  // wrap, unlike tile objects which are recreated every render() call).
+  // Only tracks currently/recently visible cells -- harmless if it grows
+  // slowly over a long session, not worth pruning for a prototype this size.
+  const staggerState = new Map(); // "row,col" -> {x, y, vx, vy}
   let anyUnsettled = false;
 
   function updateStagger(key, targetX, targetY, stiffness, damping) {
@@ -360,6 +426,9 @@ function createWall(canvas, words) {
     return s;
   }
 
+  // Last known pointer position on screen, used as the reference point for
+  // stagger responsiveness. Defaults to viewport center so nothing lags
+  // before the first drag ever happens.
   let pointerScreenX = null, pointerScreenY = null;
 
   function render() {
@@ -376,6 +445,9 @@ function createWall(canvas, words) {
     const refX = pointerScreenX !== null ? pointerScreenX : cssW / 2;
     const refY = pointerScreenY !== null ? pointerScreenY : cssH / 2;
 
+    // World-space rectangle currently visible, with a one-tile buffer so
+    // tiles partially entering the view (or enlarged by the crater effect
+    // near the rim) don't pop in/out abruptly.
     const worldLeft = (0 - camX) / zoom;
     const worldRight = (cssW - camX) / zoom;
     const worldTop = (0 - camY) / zoom;
@@ -398,6 +470,9 @@ function createWall(canvas, words) {
         const targetCX = (worldX + CARD_W / 2) * zoom + camX;
         const targetCY = (worldY + CARD_H / 2) * zoom + camY;
 
+        // Cull against the *target* position (cheap, and near enough to
+        // correct -- a tile settling in from off-screen for a frame or two
+        // isn't worth the extra bookkeeping to prevent).
         if (targetCX < -CARD_W || targetCY < -CARD_H || targetCX > cssW + CARD_W || targetCY > cssH + CARD_H) continue;
 
         const distFromPointer = Math.hypot(targetCX - refX, targetCY - refY);
@@ -417,24 +492,32 @@ function createWall(canvas, words) {
         const x = eased.x - w / 2;
         const y = eased.y - h / 2;
 
-        if (w < 0.5 || h < 0.5) continue;
+        if (w < 0.5 || h < 0.5) continue; // fully shrunk during a transition
         if (x + w < 0 || y + h < 0 || x > cssW || y > cssH) continue;
 
         const bmp = openWords.has(word.h) ? getOpenBitmap(word) : getBitmap(word);
+        if (spotlightWordH !== null && word.h !== spotlightWordH) {
+          ctx.globalAlpha = SPOTLIGHT_DIM_OPACITY;
+        }
         ctx.drawImage(bmp, x, y, w, h);
+        ctx.globalAlpha = 1;
         visibleTiles.push({ word, screen: { x, y, w, h } });
       }
     }
 
+    // Dev-only, no-op if src/dev-tools.js isn't loaded (see that file to
+    // remove all dev tooling later in one place).
     if (typeof devHooks !== 'undefined') devHooks.onRender(ctx, cssW, cssH);
   }
 
+  // ---------- Pan (drag) ----------
   let dragging = false, dragMoved = false;
   let dragStartX = 0, dragStartY = 0, camStartX = 0, camStartY = 0;
 
   canvas.addEventListener('pointerdown', (e) => {
     dragging = true;
     dragMoved = false;
+    spotlightWordH = null;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
     camStartX = camX;
@@ -487,11 +570,12 @@ function createWall(canvas, words) {
   function endDrag() {
     dragging = false;
     canvas.style.cursor = 'grab';
-    startSettleLoopIfNeeded();
+    startSettleLoopIfNeeded(); // lets lagging tiles catch up / bounce to rest
   }
   canvas.addEventListener('pointerup', endDrag);
   canvas.addEventListener('pointercancel', endDrag);
 
+  // ---------- Zoom (wheel, toward cursor) ----------
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
@@ -508,6 +592,9 @@ function createWall(canvas, words) {
     render();
   }, { passive: false });
 
+  // ---------- Click-to-open (toggles the word's open state; every instance
+  // of that word across the wrap flips together, since "open" is tracked
+  // per-word, not per-tile) ----------
   canvas.addEventListener('click', (e) => {
     if (dragMoved) { dragMoved = false; return; }
     const rect = canvas.getBoundingClientRect();
@@ -531,12 +618,17 @@ function createWall(canvas, words) {
 
   window.addEventListener('resize', resize);
 
+  // Keeps the gradient drift moving: every tick, regenerate the bitmap for
+  // each currently-visible unique word (not every tile -- a repeated word
+  // only costs one redraw regardless of how many times it's on screen),
+  // then redraw the canvas so the change is visible. Deliberately slow
+  // (~4.5/sec) since the drift itself is slow -- no need for 60fps here.
   if (ENABLE_GRADIENT_ANIMATION) {
     setInterval(() => {
       const seen = new Set();
       for (const tile of visibleTiles) {
         if (seen.has(tile.word.h)) continue;
-        if (openWords.has(tile.word.h)) continue;
+        if (openWords.has(tile.word.h)) continue; // not currently displayed, skip
         seen.add(tile.word.h);
         renderBitmap(tile.word, performance.now());
       }

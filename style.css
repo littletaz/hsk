@@ -89,6 +89,11 @@ html, body {
   cursor: pointer;
 }
 
+#filter-toggle svg {
+  width: 32px;
+  height: 22px;
+}
+
 #filter-toggle.active {
   background: #1c1712;
 }
@@ -120,14 +125,14 @@ html, body {
   font-weight: 700;
   font-size: 22px;
   color: #1c1712;
-  margin-bottom: 8px;
+  margin-bottom: 16px;
 }
 
 .filter-chip {
   font-family: 'Quicksand', -apple-system, sans-serif;
   font-weight: 600;
   font-size: 16px;
-  color: #6b5f3f;
+  color: #1c1712;
   background: #ffffff;
   border: 1px solid rgba(60, 45, 20, 0.18);
   border-radius: 14px;
@@ -146,13 +151,24 @@ html, body {
 }
 
 .filter-chip.disabled {
-  opacity: 0.4;
+  color: #cfc7b4;
+  background: transparent;
+  border-color: rgba(60, 45, 20, 0.1);
   cursor: not-allowed;
-  background: #eee9de;
 }
 
 .filter-row {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+@keyframes search-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}
+
+.search-not-found {
+  animation: search-shake 0.3s ease;
 }

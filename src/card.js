@@ -137,7 +137,7 @@ function drawHSK1Card(ctx, word, x, y, time, gridRow, gridCol) {
   octx.globalCompositeOperation = 'source-over';
 
   octx.fillStyle = '#1c1712';
-  octx.font = '400 53px "Huninn", "Noto Sans SC", sans-serif';
+  octx.font = '500 53px "Resource Han Rounded", "Noto Sans SC", sans-serif';
   octx.textAlign = 'center';
   octx.textBaseline = 'middle';
   octx.fillText(word.h, CARD_W / 2, CARD_H * 0.46);

@@ -2,12 +2,20 @@
    (fallback for any simplified-Chinese glyphs Huninn doesn't cover, since
    Huninn is a Traditional-Chinese-oriented typeface). All local, no CDN. */
 
-@font-face {
+/*@font-face {
   font-family: 'Huninn';
   font-style: normal;
   font-display: swap;
   font-weight: 400;
   src: url('huninn/huninn-chinese-traditional-400-normal.woff2') format('woff2');
+}*/
+
+@font-face {
+  font-family: 'Resource Han Rounded';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url('ResourceHanRounded/ResourceHanRoundedSC-Medium.ttf') format('truetype');
 }
 
 @font-face {
