@@ -85,7 +85,8 @@ function fieldBase(gridRow, gridCol, freqCol, freqRow, phase, centerX, centerY, 
 // cosmetic change.
 const LEVEL_COLORS = {
   1: { base: '#F8B51E', blob1: '255,96,0',  blob2: '255,218,0', blob3: '255,178,0' }, // yellow-ish
-  2: { base: '#1D7E89', blob1: '67,154,161', blob2: '110,183,190', blob3: '173,201,209' } // teal
+  2: { base: '#1D7E89', blob1: '67,154,161', blob2: '110,183,190', blob3: '173,201,209' }, // teal
+  3: { base: '#FD4F1C', blob1: '255,94,0', blob2: '255,128,0', blob3: '255,54,15' } // red-orange
 };
 
 
@@ -199,4 +200,39 @@ function wrapText(ctx, text, cx, cy, maxWidth, lineHeight) {
 
   const startY = cy - ((lines.length - 1) * lineHeight) / 2;
   lines.forEach((line, i) => ctx.fillText(line, cx, startY + i * lineHeight));
+}
+
+// The dimmed/de-emphasized state (used for non-matching search results):
+// flat #E3DDD2 background, no gradient, no grain -- same mask and text
+// styling as the normal card so it still reads clearly, just muted. Static,
+// no time param needed.
+function drawDimmedCard(ctx, word, x, y) {
+  const dpr = window.devicePixelRatio || 1;
+
+  const off = document.createElement('canvas');
+  off.width = CARD_W * dpr;
+  off.height = CARD_H * dpr;
+  const octx = off.getContext('2d');
+  octx.scale(dpr, dpr);
+
+  octx.fillStyle = '#E3DDD2';
+  octx.fillRect(0, 0, CARD_W, CARD_H);
+
+  octx.fillStyle = 'rgba(28, 23, 18, 0.5)';
+  octx.font = '400 53px "Huninn", "Noto Sans SC", sans-serif';
+  octx.textAlign = 'center';
+  octx.textBaseline = 'middle';
+  octx.fillText(word.h, CARD_W / 2, CARD_H * 0.46);
+
+  octx.fillStyle = 'rgba(28, 23, 18, 0.5)';
+  octx.font = '600 15px "Quicksand", sans-serif';
+  octx.fillText(word.p, CARD_W / 2, CARD_H * 0.8);
+
+  if (_cardMaskAlpha) {
+    octx.globalCompositeOperation = 'destination-in';
+    octx.drawImage(_cardMaskAlpha, 0, 0, CARD_W, CARD_H);
+    octx.globalCompositeOperation = 'source-over';
+  }
+
+  ctx.drawImage(off, x, y, CARD_W, CARD_H);
 }

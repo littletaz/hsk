@@ -14,7 +14,7 @@ const CRATER_RADIUS = 1200;   // px -- distance at which the effect fully settle
 const CRATER_DEPTH = 0.1;   // 0..~0.4 -- how strong the shrink/enlarge range is
 const CRATER_EDGE_BIAS = 0.9; // >1 concentrates the size change near the rim; 1 = even/gradual
 const GRID_GAP = 10;
-const ZOOM_MIN = 0.8;
+const ZOOM_MIN = 0.4;
 const ZOOM_MAX = 1.2;
 const ENABLE_GRADIENT_ANIMATION = true; // flip to false to A/B test performance
 
@@ -23,12 +23,13 @@ const ENABLE_GRADIENT_ANIMATION = true; // flip to false to A/B test performance
 // edge almost immediately). INFINITE_WALL = false: the grid is bounded to
 // exactly the words provided, dragging is clamped to that content with a
 // rubber-band resistance past the edge, and it springs back on release.
-const INFINITE_WALL = false;
+const INFINITE_WALL = true;
 
 // Rubber-band resistance (bounded mode only): how much visible overscroll
 // you get for a given raw drag distance past the edge, and the spring that
 // pulls the camera back into bounds once you let go.
 const RUBBER_BAND_MAX_OVER = 100;    // px -- roughly the max overscroll, however hard you pull
+const BOUNDED_MARGIN = 160; // px -- extra room past the content edge before the hard stop, so there's visible negative space rather than cards flush against the screen edge
 const RUBBER_BAND_RESISTANCE = 0.55; // 0..1 -- higher = less give near the edge
 const CAM_SPRING_STIFFNESS = 0.2;
 const CAM_SPRING_DAMPING = 0.75;
@@ -196,14 +197,14 @@ function createWall(canvas, words) {
     if (scaledW <= cssW) {
       minX = maxX = (cssW - scaledW) / 2;
     } else {
-      minX = cssW - scaledW;
-      maxX = 0;
+      minX = cssW - scaledW - BOUNDED_MARGIN;
+      maxX = BOUNDED_MARGIN;
     }
     if (scaledH <= cssH) {
       minY = maxY = (cssH - scaledH) / 2;
     } else {
-      minY = cssH - scaledH;
-      maxY = 0;
+      minY = cssH - scaledH - BOUNDED_MARGIN;
+      maxY = BOUNDED_MARGIN;
     }
     return { minX, maxX, minY, maxY };
   }
@@ -363,12 +364,34 @@ function createWall(canvas, words) {
   // instance opens every instance of that word across the wrap.
   const openWords = new Set();
 
+  // Search spotlight: while set, every tile except this word renders using
+  // the flat, muted card (see drawDimmedCard in card.js) at reduced scale,
+  // making a search result stand out against the rest of the wall. Cleared
+  // automatically the moment a new drag starts (see pointerdown below).
+  // Scale-down is centered on the tile's own position (same eased.x/eased.y
+  // anchor as every other scale effect), so it shrinks in place -- grid
+  // spacing itself never changes, only how large a tile renders within it.
+  const SPOTLIGHT_DIM_SCALE = 0.75;
+  let spotlightWordH = null;
+  const dimBitmapCache = new Map(); // word.h -> HTMLCanvasElement, static, no drift
+
+  function getDimBitmap(word) {
+    const cached = dimBitmapCache.get(word.h);
+    if (cached) return cached;
+    const bmp = document.createElement('canvas');
+    bmp.width = CARD_W * BITMAP_SCALE;
+    bmp.height = CARD_H * BITMAP_SCALE;
+    const bctx = bmp.getContext('2d');
+    bctx.scale(BITMAP_SCALE, BITMAP_SCALE);
+    drawDimmedCard(bctx, word, 0, 0);
+    dimBitmapCache.set(word.h, bmp);
+    return bmp;
+  }
+
   // Search spotlight: while set, every tile except this word renders dimmed,
   // making a search result stand out against the rest of the wall. Cleared
   // automatically the moment a new drag starts (see pointerdown below).
   // Dim amount is a placeholder -- exact look not designed yet, easy to tune.
-  const SPOTLIGHT_DIM_OPACITY = 0.35;
-  let spotlightWordH = null;
   const openBitmapCache = new Map(); // word.h -> HTMLCanvasElement, rendered once (static, no drift)
 
   function getOpenBitmap(word) {
@@ -483,10 +506,12 @@ function createWall(canvas, words) {
         const key = row + ',' + col;
         const eased = updateStagger(key, targetCX, targetCY, stiffness, damping);
 
+        const isDimmed = spotlightWordH !== null && word.h !== spotlightWordH;
+        const dimScale = isDimmed ? SPOTLIGHT_DIM_SCALE : 1;
         const cScale = craterScaleFor(eased.x, eased.y);
         const bump = bumpScaleFor(word.h);
         const tScale = transitionScaleFor(eased.x, eased.y);
-        const totalScale = cScale * bump * tScale;
+        const totalScale = cScale * bump * tScale * dimScale;
         const w = CARD_W * zoom * totalScale;
         const h = CARD_H * zoom * totalScale;
         const x = eased.x - w / 2;
@@ -495,12 +520,8 @@ function createWall(canvas, words) {
         if (w < 0.5 || h < 0.5) continue; // fully shrunk during a transition
         if (x + w < 0 || y + h < 0 || x > cssW || y > cssH) continue;
 
-        const bmp = openWords.has(word.h) ? getOpenBitmap(word) : getBitmap(word);
-        if (spotlightWordH !== null && word.h !== spotlightWordH) {
-          ctx.globalAlpha = SPOTLIGHT_DIM_OPACITY;
-        }
+        const bmp = isDimmed ? getDimBitmap(word) : (openWords.has(word.h) ? getOpenBitmap(word) : getBitmap(word));
         ctx.drawImage(bmp, x, y, w, h);
-        ctx.globalAlpha = 1;
         visibleTiles.push({ word, screen: { x, y, w, h } });
       }
     }

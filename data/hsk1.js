@@ -309,4 +309,4 @@ const HSK1 = [
 {h:"做饭",p:"zuò fàn",pos:"verb",cat:"food",def:"to cook",ctx:"",ex:{cn:"我在做饭。",py:"Wǒ zài zuò fàn.",en:"I'm cooking."},learned:false}
 ];
 
-HSK1.forEach(w => { w.lvl = 1; });
+HSK1.forEach((w, i) => { w.lvl = 1; w.id = 'hsk1_' + i; });
