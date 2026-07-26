@@ -186,24 +186,26 @@ html, body {
     padding: 11px;
   }
 
-  #search-wrap {
+#search-wrap {
     width: 285px;
-    height: 53px;
+    height: 40px;
   }
 
   #search-input {
-    font-size: 16px;
+    font-size: 14px;
     padding: 0 42px 0 15px;
+    border-radius: 11px;
   }
 
   #filter-toggle {
-    width: 65px;
-    height: 53px;
+    width: 49px;
+    height: 40px;
+    border-radius: 11px;
   }
 
   #filter-toggle svg {
-    width: 24px;
-    height: 17px;
+    width: 18px;
+    height: 13px;
   }
 
   #filter-panel {
@@ -242,19 +244,21 @@ html, body {
     height: 38px;
   }
 
-  #search-input {
+#search-input {
     font-size: 14px;
     padding: 0 30px 0 11px;
+    border-radius: 11px;
   }
 
   .search-icon {
     right: 11px;
   }
 
-  #filter-toggle {
+#filter-toggle {
     width: 47px;
     height: 38px;
-  }
+    border-radius: 11px;
+  }s
 
   #filter-toggle svg {
     width: 17px;

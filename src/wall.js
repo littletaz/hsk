@@ -1,14 +1,9 @@
 // The pannable/zoomable wall: camera state, input handling, per-tile crater
 // depth effect, and the render loop.
-//
-// INFINITE PANNING: rather than pre-building a fixed array of tiles, each
-// frame computes which grid cells are currently visible (from camera
-// position + zoom), and maps each cell to a word via modulo indexing into
-// the (finite) word list. There is no edge -- dragging forever just keeps
-// computing new cells and wrapping back through the same word list, like a
-// repeating tile pattern. This also means memory/CPU cost stays flat
-// regardless of how far you've panned, since we only ever touch the cells
-// actually on screen.
+
+const ENABLE_CRATER_EFFECT = false; // flip to false to A/B test with the effect off
+const ENABLE_GRADIENT_ANIMATION = false; // flip to false to A/B test performance
+const INFINITE_WALL = false;
 
 const CRATER_RADIUS = 1200;   // px -- distance at which the effect fully settles
 const CRATER_DEPTH = 0.1;   // 0..~0.4 -- how strong the shrink/enlarge range is
@@ -16,30 +11,13 @@ const CRATER_EDGE_BIAS = 0.9; // >1 concentrates the size change near the rim; 1
 const GRID_GAP = 10;
 const ZOOM_MIN = 0.4;
 const ZOOM_MAX = 1.2;
-const ENABLE_GRADIENT_ANIMATION = true; // flip to false to A/B test performance
 
-// INFINITE_WALL = true: the word list wraps forever in every direction (no
-// edge, ever -- good for a small word count where you'd otherwise hit the
-// edge almost immediately). INFINITE_WALL = false: the grid is bounded to
-// exactly the words provided, dragging is clamped to that content with a
-// rubber-band resistance past the edge, and it springs back on release.
-const INFINITE_WALL = true;
-
-// Rubber-band resistance (bounded mode only): how much visible overscroll
-// you get for a given raw drag distance past the edge, and the spring that
-// pulls the camera back into bounds once you let go.
 const RUBBER_BAND_MAX_OVER = 100;    // px -- roughly the max overscroll, however hard you pull
 const BOUNDED_MARGIN = 160; // px -- extra room past the content edge before the hard stop, so there's visible negative space rather than cards flush against the screen edge
 const RUBBER_BAND_RESISTANCE = 0.55; // 0..1 -- higher = less give near the edge
 const CAM_SPRING_STIFFNESS = 0.2;
 const CAM_SPRING_DAMPING = 0.75;
 
-// Stagger/spring-follow: each tile eases toward its true position rather
-// than snapping instantly, with responsiveness based on distance from the
-// cursor -- close tiles react almost immediately, far ones lag and settle
-// with a slight bounce. Same system handles both the drag-time stagger and
-// the post-release "bounce back to rest", since it's just a spring chasing
-// a target that happens to stop moving once you let go.
 const STAGGER_RADIUS = 1200;   // px -- distance over which responsiveness varies
 const STIFFNESS_NEAR = 0.35;   // near cursor: snappy, minimal lag
 const STIFFNESS_FAR = 0.2;    // far from cursor: noticeable lag
@@ -48,14 +26,6 @@ const DAMPING_FAR = 0.7;     // far from cursor: slight bounce/overshoot when se
 const SETTLE_EPS_POS = 0.2;   // px -- close enough to target to consider settled
 const SETTLE_EPS_VEL = 0.02;  // px/frame -- slow enough to consider settled
 
-// Filter-change transition: rather than swapping words instantly (which can
-// leave a stale, oversized tile overlapping a newly-placed one for a frame),
-// every tile shrinks to 0 first (still showing the OLD word list), THEN the
-// data actually swaps, THEN new tiles grow in (NEW word list) -- so old and
-// new content never coexist at meaningful size. Staggered by distance from
-// the viewport center (not the drag-stagger's cursor-relative reference) for
-// a "ripple outward" feel. Reuses the existing settle-loop (anyUnsettled)
-// rather than a separate animation loop.
 const FILTER_STAGGER_RADIUS = 900;    // px -- distance range over which stagger delay varies
 const FILTER_EXIT_DURATION = 260;     // ms -- each tile's own shrink duration
 const FILTER_ENTER_DURATION = 320;    // ms -- each tile's own grow duration
@@ -88,6 +58,17 @@ function mod(n, m) {
   return ((n % m) + m) % m;
 }
 
+// Identity key for caches/state keyed by word (bitmaps, open/dim state,
+// bump timing, spotlight, grid position). Uses each word's stamped id
+// (set once per data file, e.g. HSK2.forEach((w,i) => w.id = 'hsk2_'+i))
+// rather than hanzi alone -- hanzi can collide even within one level
+// (HSK3's 得 dé "to get" vs 得 děi "must" -- same character, genuinely
+// different words) and even hanzi+level can collide across levels or
+// within a level, so word.id is the only fully reliable key.
+function wordKey(word) {
+  return word.id || (word.h + '_' + word.lvl);
+}
+
 function createWall(canvas, words) {
   const dpr = window.devicePixelRatio || 1;
   const ctx = canvas.getContext('2d');
@@ -107,7 +88,7 @@ function createWall(canvas, words) {
   // drives the gradient drift -- the wall's pan/zoom itself stays purely
   // event-driven and unaffected; only the cached tile artwork changes.
   const BITMAP_REFRESH_INTERVAL = 220; // ms -- ~4.5 refreshes/sec, plenty for slow drift
-  const bitmapCache = new Map(); // word.h -> HTMLCanvasElement
+  const bitmapCache = new Map(); // wordKey(word) -> HTMLCanvasElement
   const BITMAP_SCALE = 2.2 * dpr; // headroom so crater-enlarged tiles stay crisp
 
   // Each word's fixed position within the repeating block -- used to seed
@@ -115,11 +96,11 @@ function createWall(canvas, words) {
   // words look visibly different from each other, while every wrapped
   // repeat of the *same* word still shares one identical cached bitmap.
   // Rebuilt whenever the active word list changes (see setActiveWords).
-  let wordGridPos = new Map(); // word.h -> { row, col }
+  let wordGridPos = new Map(); // wordKey(word) -> { row, col }
   function rebuildWordGridPos() {
     wordGridPos = new Map();
     words.forEach((w, i) => {
-      wordGridPos.set(w.h, { row: Math.floor(i / GRID_COLS), col: i % GRID_COLS });
+      wordGridPos.set(wordKey(w), { row: Math.floor(i / GRID_COLS), col: i % GRID_COLS });
     });
   }
   rebuildWordGridPos();
@@ -130,14 +111,14 @@ function createWall(canvas, words) {
     bmp.height = CARD_H * BITMAP_SCALE;
     const bctx = bmp.getContext('2d');
     bctx.scale(BITMAP_SCALE, BITMAP_SCALE);
-    const gridPos = wordGridPos.get(word.h) || { row: 0, col: 0 };
+    const gridPos = wordGridPos.get(wordKey(word)) || { row: 0, col: 0 };
     drawHSK1Card(bctx, word, 0, 0, time, gridPos.row, gridPos.col);
-    bitmapCache.set(word.h, bmp);
+    bitmapCache.set(wordKey(word), bmp);
     return bmp;
   }
 
   function getBitmap(word) {
-    const cached = bitmapCache.get(word.h);
+    const cached = bitmapCache.get(wordKey(word));
     if (cached) return cached;
     return renderBitmap(word, performance.now()); // first draw, synchronous
   }
@@ -152,6 +133,7 @@ function createWall(canvas, words) {
   }
 
   function craterScaleFor(screenCX, screenCY) {
+    if (!ENABLE_CRATER_EFFECT) return 1;
     const dx = screenCX - cssW / 2;
     const dy = screenCY - cssH / 2;
     const dist = Math.hypot(dx, dy);
@@ -266,7 +248,14 @@ function createWall(canvas, words) {
   // Centers the camera on an arbitrary world-space point -- the shared
   // primitive underneath the two functions below.
   function centerCameraOnWorldPoint(worldX, worldY) {
-    setCameraTarget(cssW / 2 - worldX * zoom, cssH / 2 - worldY * zoom);
+    let targetX = cssW / 2 - worldX * zoom;
+    let targetY = cssH / 2 - worldY * zoom;
+    if (!INFINITE_WALL) {
+      const { minX, maxX, minY, maxY } = getCameraBounds();
+      targetX = Math.min(Math.max(targetX, minX), maxX);
+      targetY = Math.min(Math.max(targetY, minY), maxY);
+    }
+    setCameraTarget(targetX, targetY);
   }
 
   // Recenters on the geometric middle of a word list of the given length,
@@ -290,8 +279,8 @@ function createWall(canvas, words) {
     centerCameraOnWorldPoint(col * colStep + CARD_W / 2, row * rowStep + CARD_H / 2);
     const word = words[index];
     if (word) {
-      bumpStartTimes.set(word.h, performance.now());
-      if (spotlight) spotlightWordH = word.h;
+      bumpStartTimes.set(wordKey(word), performance.now());
+      if (spotlight) spotlightWordH = wordKey(word);
       startSettleLoopIfNeeded();
     }
   }
@@ -373,10 +362,10 @@ function createWall(canvas, words) {
   // spacing itself never changes, only how large a tile renders within it.
   const SPOTLIGHT_DIM_SCALE = 0.75;
   let spotlightWordH = null;
-  const dimBitmapCache = new Map(); // word.h -> HTMLCanvasElement, static, no drift
+  const dimBitmapCache = new Map(); // wordKey(word) -> HTMLCanvasElement, static, no drift
 
   function getDimBitmap(word) {
-    const cached = dimBitmapCache.get(word.h);
+    const cached = dimBitmapCache.get(wordKey(word));
     if (cached) return cached;
     const bmp = document.createElement('canvas');
     bmp.width = CARD_W * BITMAP_SCALE;
@@ -384,7 +373,7 @@ function createWall(canvas, words) {
     const bctx = bmp.getContext('2d');
     bctx.scale(BITMAP_SCALE, BITMAP_SCALE);
     drawDimmedCard(bctx, word, 0, 0);
-    dimBitmapCache.set(word.h, bmp);
+    dimBitmapCache.set(wordKey(word), bmp);
     return bmp;
   }
 
@@ -392,10 +381,10 @@ function createWall(canvas, words) {
   // making a search result stand out against the rest of the wall. Cleared
   // automatically the moment a new drag starts (see pointerdown below).
   // Dim amount is a placeholder -- exact look not designed yet, easy to tune.
-  const openBitmapCache = new Map(); // word.h -> HTMLCanvasElement, rendered once (static, no drift)
+  const openBitmapCache = new Map(); // wordKey(word) -> HTMLCanvasElement, rendered once (static, no drift)
 
   function getOpenBitmap(word) {
-    const cached = openBitmapCache.get(word.h);
+    const cached = openBitmapCache.get(wordKey(word));
     if (cached) return cached;
     const bmp = document.createElement('canvas');
     bmp.width = CARD_W * BITMAP_SCALE;
@@ -403,7 +392,7 @@ function createWall(canvas, words) {
     const bctx = bmp.getContext('2d');
     bctx.scale(BITMAP_SCALE, BITMAP_SCALE);
     drawOpenCard(bctx, word, 0, 0);
-    openBitmapCache.set(word.h, bmp);
+    openBitmapCache.set(wordKey(word), bmp);
     return bmp;
   }
 
@@ -412,7 +401,7 @@ function createWall(canvas, words) {
   // animation loop -- the bump just keeps that loop alive a bit longer.
   const BUMP_DURATION = 260; // ms
   const BUMP_PEAK = 0.12;    // extra scale at the peak of the pop
-  const bumpStartTimes = new Map(); // word.h -> performance.now() at last toggle
+  const bumpStartTimes = new Map(); // wordKey(word) -> performance.now() at last toggle
 
   function bumpScaleFor(wordH) {
     const start = bumpStartTimes.get(wordH);
@@ -506,10 +495,10 @@ function createWall(canvas, words) {
         const key = row + ',' + col;
         const eased = updateStagger(key, targetCX, targetCY, stiffness, damping);
 
-        const isDimmed = spotlightWordH !== null && word.h !== spotlightWordH;
+        const isDimmed = spotlightWordH !== null && wordKey(word) !== spotlightWordH;
         const dimScale = isDimmed ? SPOTLIGHT_DIM_SCALE : 1;
         const cScale = craterScaleFor(eased.x, eased.y);
-        const bump = bumpScaleFor(word.h);
+        const bump = bumpScaleFor(wordKey(word));
         const tScale = transitionScaleFor(eased.x, eased.y);
         const totalScale = cScale * bump * tScale * dimScale;
         const w = CARD_W * zoom * totalScale;
@@ -520,7 +509,7 @@ function createWall(canvas, words) {
         if (w < 0.5 || h < 0.5) continue; // fully shrunk during a transition
         if (x + w < 0 || y + h < 0 || x > cssW || y > cssH) continue;
 
-        const bmp = isDimmed ? getDimBitmap(word) : (openWords.has(word.h) ? getOpenBitmap(word) : getBitmap(word));
+        const bmp = isDimmed ? getDimBitmap(word) : (openWords.has(wordKey(word)) ? getOpenBitmap(word) : getBitmap(word));
         ctx.drawImage(bmp, x, y, w, h);
         visibleTiles.push({ word, screen: { x, y, w, h } });
       }
@@ -626,7 +615,7 @@ function createWall(canvas, words) {
       py >= t.screen.y && py <= t.screen.y + t.screen.h);
     if (!hit) return;
 
-    const key = hit.word.h;
+    const key = wordKey(hit.word);
     if (openWords.has(key)) {
       openWords.delete(key);
     } else {
@@ -648,9 +637,9 @@ function createWall(canvas, words) {
     setInterval(() => {
       const seen = new Set();
       for (const tile of visibleTiles) {
-        if (seen.has(tile.word.h)) continue;
-        if (openWords.has(tile.word.h)) continue; // not currently displayed, skip
-        seen.add(tile.word.h);
+        if (seen.has(wordKey(tile.word))) continue;
+        if (openWords.has(wordKey(tile.word))) continue; // not currently displayed, skip
+        seen.add(wordKey(tile.word));
         renderBitmap(tile.word, performance.now());
       }
       if (seen.size > 0) render();
