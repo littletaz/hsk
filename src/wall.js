@@ -13,7 +13,7 @@ const ZOOM_MIN = 0.4;
 const ZOOM_MAX = 1.2;
 
 const RUBBER_BAND_MAX_OVER = 100;    // px -- roughly the max overscroll, however hard you pull
-const BOUNDED_MARGIN = 160; // px -- extra room past the content edge before the hard stop, so there's visible negative space rather than cards flush against the screen edge
+const BOUNDED_MARGIN = 100; // px -- extra room past the content edge before the hard stop, so there's visible negative space rather than cards flush against the screen edge
 const RUBBER_BAND_RESISTANCE = 0.55; // 0..1 -- higher = less give near the edge
 const CAM_SPRING_STIFFNESS = 0.2;
 const CAM_SPRING_DAMPING = 0.75;
