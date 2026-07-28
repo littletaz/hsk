@@ -63,6 +63,23 @@ function loadCardMask(src) {
   });
 }
 
+// The card border artwork (rough/sprayed edge, drawn as a separate layer
+// over each card so it can be offset and rotated independently). Kept as a
+// plain <img> rather than a canvas -- no pixel processing needed, unlike
+// the mask above which gets luminance-to-alpha converted.
+let _cardBorderImg = null;
+
+function loadCardBorder(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      _cardBorderImg = img;
+      resolve(img);
+    };
+    img.onerror = reject;
+    img.src = src;
+  });
+}
 function driftOffset(time, periodXMs, periodYMs, phaseX, phaseY, ampX, ampY) {
   const t = time / 1000;
   return {
@@ -137,15 +154,23 @@ function drawHSK1Card(ctx, word, x, y, time, gridRow, gridCol) {
   octx.globalAlpha = 1;
   octx.globalCompositeOperation = 'source-over';
 
-  octx.fillStyle = '#1c1712';
-  octx.font = '500 53px "Resource Han Rounded", "Noto Sans SC", sans-serif';
+  // Hanzi gets a white outline (stroke behind fill) so it stays legible
+  // regardless of how dark the gradient underneath it gets -- solves the
+  // contrast problem on darker level colors (reds, purples) without
+  // needing a different text color per level.
+  octx.font = '900 60px "Resource Han Rounded", "Noto Sans SC", sans-serif';
   octx.textAlign = 'center';
   octx.textBaseline = 'middle';
+  octx.lineJoin = 'round';
+  octx.lineWidth = 16; // tunable -- outline thickness
+  octx.strokeStyle = '#1c1712';
+  octx.strokeText(word.h, CARD_W / 2, CARD_H * 0.46);
+  octx.fillStyle = '#ffffff';
   octx.fillText(word.h, CARD_W / 2, CARD_H * 0.46);
 
-  octx.fillStyle = 'rgba(28, 23, 18, 0.7)';
-  octx.font = '600 15px "Quicksand", sans-serif';
-  octx.fillText(word.p, CARD_W / 2, CARD_H * 0.8);
+  // Pinyin removed from the card front -- moved to the click-to-open
+  // reveal card (see drawOpenCard) per the redesign: more useful as part
+  // of the reveal than always-visible.
 
   if (_cardMaskAlpha) {
     octx.globalCompositeOperation = 'destination-in';
@@ -168,11 +193,17 @@ function drawOpenCard(ctx, word, x, y) {
   octx.fillStyle = '#fdfbf6';
   octx.fillRect(0, 0, CARD_W, CARD_H);
 
-  octx.fillStyle = '#1c1712';
-  octx.font = '600 22px "Quicksand", sans-serif';
+  // Pinyin's new home -- moved off the card front, shown here as part of
+  // the reveal, above the definition.
+  octx.fillStyle = 'rgba(28, 23, 18, 0.6)';
+  octx.font = '600 16px "Quicksand", sans-serif';
   octx.textAlign = 'center';
   octx.textBaseline = 'middle';
-  wrapText(octx, word.def, CARD_W / 2, CARD_H / 2, CARD_W - 40, 28);
+  octx.fillText(word.p, CARD_W / 2, CARD_H * 0.24);
+
+  octx.fillStyle = '#1c1712';
+  octx.font = '600 22px "Quicksand", sans-serif';
+  wrapText(octx, word.def, CARD_W / 2, CARD_H * 0.6, CARD_W - 40, 26);
 
   if (_cardMaskAlpha) {
     octx.globalCompositeOperation = 'destination-in';
@@ -219,7 +250,7 @@ function drawDimmedCard(ctx, word, x, y) {
   octx.fillRect(0, 0, CARD_W, CARD_H);
 
   octx.fillStyle = 'rgba(28, 23, 18, 0.5)';
-  octx.font = '400 53px "Huninn", "Noto Sans SC", sans-serif';
+  octx.font = '900 60px "Resource Han Rounded", "Noto Sans SC", sans-serif';
   octx.textAlign = 'center';
   octx.textBaseline = 'middle';
   octx.fillText(word.h, CARD_W / 2, CARD_H * 0.46);

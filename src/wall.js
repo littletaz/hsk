@@ -2,13 +2,13 @@
 // depth effect, and the render loop.
 
 const ENABLE_CRATER_EFFECT = false; // flip to false to A/B test with the effect off
-const ENABLE_GRADIENT_ANIMATION = false; // flip to false to A/B test performance
+const ENABLE_GRADIENT_ANIMATION = true; // flip to false to A/B test performance
 const INFINITE_WALL = false;
 
 const CRATER_RADIUS = 1200;   // px -- distance at which the effect fully settles
 const CRATER_DEPTH = 0.1;   // 0..~0.4 -- how strong the shrink/enlarge range is
 const CRATER_EDGE_BIAS = 0.9; // >1 concentrates the size change near the rim; 1 = even/gradual
-const GRID_GAP = 10;
+const GRID_GAP = 20;
 const ZOOM_MIN = 0.4;
 const ZOOM_MAX = 1.2;
 
@@ -30,6 +30,24 @@ const FILTER_STAGGER_RADIUS = 900;    // px -- distance range over which stagger
 const FILTER_EXIT_DURATION = 260;     // ms -- each tile's own shrink duration
 const FILTER_ENTER_DURATION = 320;    // ms -- each tile's own grow duration
 const FILTER_STAGGER_MAX_DELAY = 220; // ms -- extra delay for the farthest-out tile
+
+const RESPONSIVE_SCALE = CARD_W / 300;
+
+// --- Border misregistration (all four are meant to be tuned by eye) ---
+// BORDER_MARGIN = 4 matches the border image's own baked-in margin
+// (308x188 artwork over a 300x180 card), so the artwork renders at its
+// intended proportions. Changing it makes the frame sit tighter/looser
+// than drawn, which also stretches the line thickness slightly.
+const BORDER_MARGIN = -3;
+const BORDER_OFFSET_RANGE = 3;     // px -- max seeded resting drift in x/y
+const BORDER_ROTATION_RANGE = 4;   // degrees -- max seeded tilt
+const MAX_BORDER_OFFSET = 3;       // px -- hard clamp on seeded + lag combined
+
+// --- Pan lag: border trails the card's motion, then springs back ---
+const PAN_LAG_STIFFNESS = 0.3;
+const PAN_LAG_DAMPING = 0.55;
+const PAN_LAG_VELOCITY_SCALE = 0.15; // how much of a tile's velocity becomes lag displacement
+
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
@@ -131,6 +149,87 @@ function createWall(canvas, words) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     render();
   }
+
+  // Simple deterministic string hash -> [0,1). Not cryptographic, doesn't
+  // need to be -- just needs to give the same word the same "random" value
+  // every time, forever, without storing anything.
+function seededRandom(seed) {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+  }
+  return (Math.abs(hash) % 10000) / 10000;
+}
+
+// Each word's resting (non-lagged) border offset/rotation. Cached per word
+// since it never changes -- no reason to recompute the hash every frame.
+const borderOffsetCache = new Map(); // wordKey(word) -> { x, y, rotation }
+
+function borderOffsetFor(word) {
+  const key = wordKey(word);
+  const cached = borderOffsetCache.get(key);
+  if (cached) return cached;
+
+  const rx = seededRandom(key + '_bx') * 2 - 1; // -1..1
+  const ry = seededRandom(key + '_by') * 2 - 1;
+  const rr = seededRandom(key + '_br') * 2 - 1;
+  const result = {
+    x: rx * BORDER_OFFSET_RANGE,
+    y: ry * BORDER_OFFSET_RANGE,
+    rotation: rr * BORDER_ROTATION_RANGE
+  };
+  borderOffsetCache.set(key, result);
+  return result;
+}
+
+// Per-cell spring (same "row,col" key as the primary stagger) that adds a
+// small extra displacement, opposite the tile's current velocity, while
+// it's moving fast -- reads as the border "lagging behind" the card's
+// motion -- and relaxes back to (0,0) as the tile's own velocity decays.
+const borderLagState = new Map(); // "row,col" -> { x, y, vx, vy }
+
+function updateBorderLag(key, velX, velY) {
+  let s = borderLagState.get(key);
+  if (!s) {
+    s = { x: 0, y: 0, vx: 0, vy: 0 };
+    borderLagState.set(key, s);
+  }
+  const targetX = -velX * PAN_LAG_VELOCITY_SCALE;
+  const targetY = -velY * PAN_LAG_VELOCITY_SCALE;
+  s.vx = (s.vx + (targetX - s.x) * PAN_LAG_STIFFNESS) * PAN_LAG_DAMPING;
+  s.vy = (s.vy + (targetY - s.y) * PAN_LAG_STIFFNESS) * PAN_LAG_DAMPING;
+  s.x += s.vx;
+  s.y += s.vy;
+
+  if (Math.abs(targetX - s.x) > 0.1 || Math.abs(targetY - s.y) > 0.1 ||
+      Math.abs(s.vx) > 0.05 || Math.abs(s.vy) > 0.05) {
+    anyUnsettled = true;
+  }
+  return s;
+}
+
+// Draws the border artwork (see loadCardBorder in card.js) as a separate
+// layer over the card, offset and rotated per its seed + pan lag. Only the
+// border rotates -- the card bitmap itself is always drawn axis-aligned,
+// which is what produces the misregistration look.
+//
+// The source image is 308x188 against a 300x180 card, i.e. it has a uniform
+// 4px margin baked into the artwork; BORDER_MARGIN = 4 therefore reproduces
+// it at its exact intended proportions with no distortion. The margin is
+// multiplied by the tile's current on-screen scale so it tracks zoom rather
+// than staying a fixed pixel amount as cards shrink.
+function drawCardBorder(screenX, screenY, w, h, offsetX, offsetY, rotationDeg) {
+  if (!_cardBorderImg) return; // not loaded yet -- skip this frame
+  const scale = w / CARD_W;
+  const margin = BORDER_MARGIN * scale;
+  const bw = w + margin * 2;
+  const bh = h + margin * 2;
+  ctx.save();
+  ctx.translate(screenX + w / 2 + offsetX, screenY + h / 2 + offsetY);
+  ctx.rotate(rotationDeg * Math.PI / 180);
+  ctx.drawImage(_cardBorderImg, -bw / 2, -bh / 2, bw, bh);
+  ctx.restore();
+}
 
   function craterScaleFor(screenCX, screenCY) {
     if (!ENABLE_CRATER_EFFECT) return 1;
@@ -509,9 +608,29 @@ function createWall(canvas, words) {
         if (w < 0.5 || h < 0.5) continue; // fully shrunk during a transition
         if (x + w < 0 || y + h < 0 || x > cssW || y > cssH) continue;
 
-        const bmp = isDimmed ? getDimBitmap(word) : (openWords.has(wordKey(word)) ? getOpenBitmap(word) : getBitmap(word));
+        const isOpen = openWords.has(wordKey(word));
+        const bmp = isDimmed ? getDimBitmap(word) : (isOpen ? getOpenBitmap(word) : getBitmap(word));
         ctx.drawImage(bmp, x, y, w, h);
         visibleTiles.push({ word, screen: { x, y, w, h } });
+
+        // Border is part of the normal card's identity only -- the open
+        // (definition) card and the dimmed search state both drop it, so
+        // those states read as clearly set apart rather than just recolored.
+        // Skipping the lag spring too means no wasted settle-loop frames
+        // animating something that isn't drawn.
+        if (!isOpen && !isDimmed) {
+          const resting = borderOffsetFor(word);
+          const lag = updateBorderLag(key, eased.vx, eased.vy);
+          let borderX = resting.x + lag.x;
+          let borderY = resting.y + lag.y;
+          const borderDist = Math.hypot(borderX, borderY);
+          if (borderDist > MAX_BORDER_OFFSET) {
+            const clampScale = MAX_BORDER_OFFSET / borderDist;
+            borderX *= clampScale;
+            borderY *= clampScale;
+          }
+          drawCardBorder(x, y, w, h, borderX, borderY, resting.rotation);
+        }
       }
     }
 

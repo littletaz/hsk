@@ -1,9 +1,10 @@
 async function boot() {
     await Promise.all([
-    document.fonts.load('400 53px "Resource Han Rounded"'),
+    document.fonts.load('900 60px "Resource Han Rounded"'),
     document.fonts.load('600 15px "Quicksand"'),
     document.fonts.load('400 53px "Noto Sans SC"'),
-    loadCardMask('assets/card-mask.png')
+    loadCardMask('assets/card-mask.png'),
+    loadCardBorder('assets/card-border.png')
     ]);
 
     const canvas = document.getElementById('wall');
