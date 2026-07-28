@@ -49,6 +49,14 @@ const PAN_LAG_DAMPING = 0.55;
 const PAN_LAG_VELOCITY_SCALE = 0.15; // how much of a tile's velocity becomes lag displacement
 
 
+// --- State-change crossfades ---
+// The open (definition) card and the dimmed search card used to swap in on
+// a single frame -- a hard cut. These drive a crossfade between the old and
+// new artwork instead, and ease the dim scale rather than snapping it.
+const STATE_FADE_DURATION = 120;  // ms -- open/close crossfade
+
+
+
 function lerp(a, b, t) {
   return a + (b - a) * t;
 }
@@ -59,6 +67,10 @@ function smoothstep(t) {
 
 function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function easeOutCubic(t) {
+  return 1 - Math.pow(1 - t, 3);
 }
 
 // Column count as a function of word count, aiming for a 5:4 (columns:rows)
@@ -218,13 +230,14 @@ function updateBorderLag(key, velX, velY) {
 // it at its exact intended proportions with no distortion. The margin is
 // multiplied by the tile's current on-screen scale so it tracks zoom rather
 // than staying a fixed pixel amount as cards shrink.
-function drawCardBorder(screenX, screenY, w, h, offsetX, offsetY, rotationDeg) {
+function drawCardBorder(screenX, screenY, w, h, offsetX, offsetY, rotationDeg, alpha) {
   if (!_cardBorderImg) return; // not loaded yet -- skip this frame
   const scale = w / CARD_W;
   const margin = BORDER_MARGIN * scale;
   const bw = w + margin * 2;
   const bh = h + margin * 2;
   ctx.save();
+  ctx.globalAlpha = alpha == null ? 1 : alpha;
   ctx.translate(screenX + w / 2 + offsetX, screenY + h / 2 + offsetY);
   ctx.rotate(rotationDeg * Math.PI / 180);
   ctx.drawImage(_cardBorderImg, -bw / 2, -bh / 2, bw, bh);
@@ -461,6 +474,39 @@ function drawCardBorder(screenX, screenY, w, h, offsetX, offsetY, rotationDeg) {
   // spacing itself never changes, only how large a tile renders within it.
   const SPOTLIGHT_DIM_SCALE = 0.75;
   let spotlightWordH = null;
+  
+  // Which word the dim state is being rendered *against*. Distinct from
+  // spotlightWordH because that goes null the instant a search is cleared --
+  // which would leave nothing to fade against on the way out, snapping every
+  // card back. This one persists until the fade actually finishes.
+  let spotlightRenderWordH = null;
+  let spotlightProgress = 0; // 0 = nothing dimmed, 1 = fully dimmed
+  let spotlightFadeFrom = 0;
+  let spotlightFadeStart = 0;
+  let spotlightPrevTarget = 0;
+
+  function updateSpotlightProgress() {
+    const target = spotlightWordH !== null ? 1 : 0;
+    if (spotlightWordH !== null) spotlightRenderWordH = spotlightWordH;
+
+    if (target !== spotlightPrevTarget) {
+      // Direction changed -- restart the ease from wherever it currently is,
+      // so interrupting a half-finished fade doesn't jump.
+      spotlightFadeFrom = spotlightProgress;
+      spotlightFadeStart = performance.now();
+      spotlightPrevTarget = target;
+    }
+
+    const t = (performance.now() - spotlightFadeStart) / STATE_FADE_DURATION;
+    if (t >= 1) {
+      spotlightProgress = target;
+      if (target === 0) spotlightRenderWordH = null;
+      return;
+    }
+    anyUnsettled = true;
+    spotlightProgress = spotlightFadeFrom + (target - spotlightFadeFrom) * easeOutCubic(t);
+  }
+
   const dimBitmapCache = new Map(); // wordKey(word) -> HTMLCanvasElement, static, no drift
 
   function getDimBitmap(word) {
@@ -512,6 +558,23 @@ function drawCardBorder(screenX, screenY, w, h, offsetX, offsetY, rotationDeg) {
     return 1 + BUMP_PEAK * Math.sin(t * Math.PI);
   }
 
+  // How far along a word is in the crossfade toward its *current* open state.
+  // 1 means fully settled (draw one bitmap); below 1 means both the outgoing
+  // and incoming artwork get drawn, the incoming one at this alpha. Tracked
+  // separately from bumpStartTimes because that timestamp also gets set on a
+  // search jump, which shouldn't trigger an open/close crossfade.
+  const openFadeStart = new Map(); // wordKey(word) -> timestamp of last toggle
+
+  function openFadeFor(key) {
+    const start = openFadeStart.get(key);
+    if (start == null) return 1; // never toggled -- fully in its current state
+    const t = (performance.now() - start) / STATE_FADE_DURATION;
+    if (t >= 1) return 1;
+    anyUnsettled = true;
+    return easeOutCubic(t);
+  }
+
+  
   // Per-cell spring state, keyed by grid cell (stable across the infinite
   // wrap, unlike tile objects which are recreated every render() call).
   // Only tracks currently/recently visible cells -- harmless if it grows
@@ -546,6 +609,7 @@ function drawCardBorder(screenX, screenY, w, h, offsetX, offsetY, rotationDeg) {
     updateTransitionPhase();
     checkBoundsAndSnapBack();
     updateCameraSpring();
+    updateSpotlightProgress();
 
     ctx.clearRect(0, 0, cssW, cssH);
     ctx.imageSmoothingEnabled = true;
@@ -590,14 +654,18 @@ function drawCardBorder(screenX, screenY, w, h, offsetX, offsetY, rotationDeg) {
         const distFactor = Math.min(distFromPointer / STAGGER_RADIUS, 1);
         const stiffness = lerp(STIFFNESS_NEAR, STIFFNESS_FAR, distFactor);
         const damping = lerp(DAMPING_NEAR, DAMPING_FAR, distFactor);
-
+        
         const key = row + ',' + col;
         const eased = updateStagger(key, targetCX, targetCY, stiffness, damping);
-
-        const isDimmed = spotlightWordH !== null && wordKey(word) !== spotlightWordH;
-        const dimScale = isDimmed ? SPOTLIGHT_DIM_SCALE : 1;
+        
+        const wKey = wordKey(word);
+        // Dim is measured against spotlightRenderWordH (not spotlightWordH)
+        // so the fade-out still knows which card was the match.
+        const isDimmed = spotlightRenderWordH !== null && wKey !== spotlightRenderWordH;
+        const dimAmount = isDimmed ? spotlightProgress : 0;
+        const dimScale = lerp(1, SPOTLIGHT_DIM_SCALE, dimAmount);
         const cScale = craterScaleFor(eased.x, eased.y);
-        const bump = bumpScaleFor(wordKey(word));
+        const bump = bumpScaleFor(wKey);
         const tScale = transitionScaleFor(eased.x, eased.y);
         const totalScale = cScale * bump * tScale * dimScale;
         const w = CARD_W * zoom * totalScale;
@@ -608,17 +676,32 @@ function drawCardBorder(screenX, screenY, w, h, offsetX, offsetY, rotationDeg) {
         if (w < 0.5 || h < 0.5) continue; // fully shrunk during a transition
         if (x + w < 0 || y + h < 0 || x > cssW || y > cssH) continue;
 
-        const isOpen = openWords.has(wordKey(word));
-        const bmp = isDimmed ? getDimBitmap(word) : (isOpen ? getOpenBitmap(word) : getBitmap(word));
-        ctx.drawImage(bmp, x, y, w, h);
+        // Normal/open artwork first, crossfading between the two if this word
+        // is mid-toggle. Then the dimmed card composited over the top at
+        // dimAmount -- at 1 it fully covers, so that reads as a crossfade too.
+        const isOpen = openWords.has(wKey);
+        const openFade = openFadeFor(wKey);
+        if (openFade < 1) {
+          const outgoing = isOpen ? getBitmap(word) : getOpenBitmap(word);
+          ctx.drawImage(outgoing, x, y, w, h);
+          ctx.globalAlpha = openFade;
+        }
+        ctx.drawImage(isOpen ? getOpenBitmap(word) : getBitmap(word), x, y, w, h);
+        ctx.globalAlpha = 1;
+
+        if (dimAmount > 0.001) {
+          ctx.globalAlpha = dimAmount;
+          ctx.drawImage(getDimBitmap(word), x, y, w, h);
+          ctx.globalAlpha = 1;
+        }
+
         visibleTiles.push({ word, screen: { x, y, w, h } });
 
-        // Border is part of the normal card's identity only -- the open
-        // (definition) card and the dimmed search state both drop it, so
-        // those states read as clearly set apart rather than just recolored.
-        // Skipping the lag spring too means no wasted settle-loop frames
-        // animating something that isn't drawn.
-        if (!isOpen && !isDimmed) {
+        // Border belongs to the normal card only -- it fades out as the card
+        // moves into either the open or the dimmed state, rather than being
+        // dropped on a single frame.
+        const borderAlpha = (isOpen ? 1 - openFade : openFade) * (1 - dimAmount);
+        if (borderAlpha > 0.01) {
           const resting = borderOffsetFor(word);
           const lag = updateBorderLag(key, eased.vx, eased.vy);
           let borderX = resting.x + lag.x;
@@ -629,7 +712,7 @@ function drawCardBorder(screenX, screenY, w, h, offsetX, offsetY, rotationDeg) {
             borderX *= clampScale;
             borderY *= clampScale;
           }
-          drawCardBorder(x, y, w, h, borderX, borderY, resting.rotation);
+          drawCardBorder(x, y, w, h, borderX, borderY, resting.rotation, borderAlpha);
         }
       }
     }
@@ -740,7 +823,9 @@ function drawCardBorder(screenX, screenY, w, h, offsetX, offsetY, rotationDeg) {
     } else {
       openWords.add(key);
     }
+    
     bumpStartTimes.set(key, performance.now());
+    openFadeStart.set(key, performance.now());
     render();
     startSettleLoopIfNeeded();
   });
