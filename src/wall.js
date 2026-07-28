@@ -2,8 +2,8 @@
 // depth effect, and the render loop.
 
 const ENABLE_CRATER_EFFECT = false; // flip to false to A/B test with the effect off
-const ENABLE_GRADIENT_ANIMATION = true; // flip to false to A/B test performance
-const INFINITE_WALL = false;
+const ENABLE_GRADIENT_ANIMATION = false; // flip to false to A/B test performance
+const INFINITE_WALL = true;
 
 const CRATER_RADIUS = 1200;   // px -- distance at which the effect fully settles
 const CRATER_DEPTH = 0.1;   // 0..~0.4 -- how strong the shrink/enlarge range is
