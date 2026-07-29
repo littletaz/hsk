@@ -9,8 +9,17 @@ const CRATER_RADIUS = 1200;   // px -- distance at which the effect fully settle
 const CRATER_DEPTH = 0.1;   // 0..~0.4 -- how strong the shrink/enlarge range is
 const CRATER_EDGE_BIAS = 0.9; // >1 concentrates the size change near the rim; 1 = even/gradual
 const GRID_GAP = 20;
-const ZOOM_MIN = 0.4;
-const ZOOM_MAX = 1.2;
+
+function computeViewScale() {
+  const vw = window.innerWidth;
+  if (vw < 600) return 0.33;   // mobile
+  if (vw < 1024) return 0.6;   // tablet
+  return 1.0;                  // desktop
+}
+const VIEW_SCALE = computeViewScale();
+
+const ZOOM_MIN = 0.4 * VIEW_SCALE;
+const ZOOM_MAX = 1.2 * VIEW_SCALE;
 
 const RUBBER_BAND_MAX_OVER = 100;    // px -- roughly the max overscroll, however hard you pull
 const BOUNDED_MARGIN = 100; // px -- extra room past the content edge before the hard stop, so there's visible negative space rather than cards flush against the screen edge
@@ -104,7 +113,7 @@ function createWall(canvas, words) {
   const ctx = canvas.getContext('2d');
 
   let cssW = 0, cssH = 0;
-  let camX = 0, camY = 0, zoom = 1;
+  let camX = 0, camY = 0, zoom = VIEW_SCALE;
 
   const colStep = CARD_W + GRID_GAP;
   const rowStep = CARD_H + GRID_GAP;
@@ -119,7 +128,7 @@ function createWall(canvas, words) {
   // event-driven and unaffected; only the cached tile artwork changes.
   const BITMAP_REFRESH_INTERVAL = 220; // ms -- ~4.5 refreshes/sec, plenty for slow drift
   const bitmapCache = new Map(); // wordKey(word) -> HTMLCanvasElement
-  const BITMAP_SCALE = 2.2 * dpr; // headroom so crater-enlarged tiles stay crisp
+  const BITMAP_SCALE = ZOOM_MAX * dpr * 1.2; // headroom so crater-enlarged tiles stay crisp
 
   // Each word's fixed position within the repeating block -- used to seed
   // that word's blob field layout (see fieldBase in card.js) so different
@@ -712,7 +721,9 @@ function drawCardBorder(screenX, screenY, w, h, offsetX, offsetY, rotationDeg, a
             borderX *= clampScale;
             borderY *= clampScale;
           }
-          drawCardBorder(x, y, w, h, borderX, borderY, resting.rotation, borderAlpha);
+          
+          const tileScale = w / CARD_W;
+          drawCardBorder(x, y, w, h, borderX * tileScale, borderY * tileScale, resting.rotation, borderAlpha);
         }
       }
     }
