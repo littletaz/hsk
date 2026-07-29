@@ -28,8 +28,18 @@ function stripDiacritics(str) {
 }
 
 function setupSearch(wall) {
-    const input = document.getElementById('search-input');
-    input.addEventListener('keydown', (e) => {
+  const input = document.getElementById('search-input');
+  const wrap = document.getElementById('search-wrap');
+
+  // Icon/border color state: pale when empty, black once there's something
+  // to search, red while the last attempt found nothing. Typing again
+  // always clears the error state, even before Enter is pressed.
+  input.addEventListener('input', () => {
+    wrap.classList.toggle('has-value', input.value.trim().length > 0);
+    wrap.classList.remove('search-error');
+  });
+
+  input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
 
     const rawQuery = input.value.trim();
@@ -39,14 +49,17 @@ function setupSearch(wall) {
     const idx = findSearchMatch(currentWords, rawQuery, query);
 
     if (idx === -1) {
-        input.classList.remove('search-not-found');
-        void input.offsetWidth; // restart the animation if triggered again
-        input.classList.add('search-not-found');
-        return;
+      wrap.classList.add('search-error');
+      input.classList.remove('search-not-found');
+      void input.offsetWidth; // restart the shake if triggered again
+      input.classList.add('search-not-found');
+      return;
     }
 
+    wrap.classList.remove('search-error');
     wall.centerCameraOnWordIndex(idx, true);
-    });
+    input.blur(); // dismiss the on-screen keyboard now that the word is found
+  });
 }
 
 // Splits a definition like "I; me" or "to see; to catch sight of" into

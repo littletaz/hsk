@@ -177,6 +177,27 @@ html, body {
   animation: search-shake 0.3s ease;
 }
 
+/* Search icon: pale when empty, black once there's text to search, red on
+   a failed search. Overrides the SVG's own inline fill="#F2EFE8" -- CSS
+   rules matching the element win over presentational attributes. */
+.search-icon path {
+  transition: fill 0.15s ease;
+}
+
+#search-wrap.has-value .search-icon path {
+  fill: #1c1712;
+}
+
+#search-wrap.search-error .search-icon path {
+  fill: #D64545;
+}
+
+/* Error state: red typed text + red border on the field itself. Cleared
+   automatically the moment the user types again (see app.js). */
+#search-wrap.search-error #search-input {
+  color: #D64545;
+  border: 2px solid #D64545;
+}
 
 
 /* Tablet */
@@ -244,7 +265,7 @@ html, body {
     height: 38px;
   }
 
-#search-input {
+  #search-input {
     font-size: 14px;
     padding: 0 30px 0 11px;
     border-radius: 11px;
